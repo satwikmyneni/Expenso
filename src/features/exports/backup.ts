@@ -1,0 +1,9 @@
+import { z } from "zod";
+import type { FinanceData } from "@/features/finance/types";
+
+const backupSchema = z.object({ version: z.literal(1), exportedAt: z.string(), data: z.object({ profile: z.object({ id:z.string(), displayName:z.string(), email:z.string(), currency:z.string(), locale:z.string(), timezone:z.string(), theme:z.enum(["light","dark","system"]) }), accounts:z.array(z.record(z.unknown())),categories:z.array(z.record(z.unknown())),transactions:z.array(z.record(z.unknown())),budgets:z.array(z.record(z.unknown())),goals:z.array(z.record(z.unknown())),goalContributions:z.array(z.record(z.unknown())).optional().default([]),recurring:z.array(z.record(z.unknown())),notifications:z.array(z.record(z.unknown())).optional().default([]),notificationPreferences:z.object({pushEnabled:z.boolean()}).optional().default({pushEnabled:false}),demo:z.boolean() }) });
+const encode=(_:string,value:unknown)=>typeof value==="bigint"?{__minor_units:String(value)}:value;
+const decode=(_:string,value:unknown)=>value&&typeof value==="object"&&"__minor_units" in value?BigInt(String((value as {__minor_units:unknown}).__minor_units)):value;
+export function createBackup(data:FinanceData){return JSON.stringify({version:1,exportedAt:new Date().toISOString(),data},encode,2)}
+export async function readBackup(file:File):Promise<FinanceData>{const parsed=JSON.parse(await file.text(),decode) as unknown;const result=backupSchema.safeParse(parsed);if(!result.success)throw new Error("This is not a valid Expenso backup");return result.data.data as unknown as FinanceData;}
+export function downloadBackup(data:FinanceData){const url=URL.createObjectURL(new Blob([createBackup(data)],{type:"application/json"}));const a=document.createElement("a");a.href=url;a.download=`expenso-backup-${new Date().toISOString().slice(0,10)}.json`;a.click();URL.revokeObjectURL(url)}

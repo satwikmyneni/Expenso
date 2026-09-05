@@ -1,0 +1,11 @@
+{
+  "name": "Expenso — Personal Finance",
+  "short_name": "Expenso",
+  "description": "Private expense tracking, budgets, goals and financial insights.",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#080b14",
+  "theme_color": "#080b14",
+  "orientation": "portrait-primary",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

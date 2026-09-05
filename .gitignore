@@ -1,0 +1,16 @@
+node_modules/
+.next/
+.next-e2e/
+out/
+coverage/
+playwright-report/
+test-results/
+.env
+.env.local
+.env.*.local
+!.env.example
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
+supabase/.branches/
+supabase/.temp/
