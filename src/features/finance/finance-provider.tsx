@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { demoData } from "./demo-data";
-import type { Account, AccountDraft, Budget, Category, CategoryDraft, FinanceData, FinanceTransaction, Goal, GoalContribution, GoalContributionDraft, ProfileDraft, RecurringDraft, TransactionDraft } from "./types";
+import type { Account, AccountDraft, Budget, Category, CategoryDraft, FinanceData, FinanceTransaction, Goal, GoalContribution, GoalContributionDraft, ImportCompletion, ImportHistoryDraft, ImportHistoryItem, MerchantRule, MerchantRuleDraft, ProfileDraft, RecurringDraft, TransactionDraft } from "./types";
 import { parseMoney } from "./money";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { supabaseConfigState } from "@/lib/supabase/config";
@@ -12,6 +12,7 @@ import { enqueue, failOperation, pendingOperations, removeOperation } from "@/li
 import { isDemoMode } from "./demo-mode";
 import { buildLiabilityReminderCandidates } from "./liability-reminders";
 import { loadedAccountDeleteBlocker } from "@/features/accounts/account-deletion";
+import { sha256File, validateReceiptFile } from "@/features/imports/file-security";
 
 type ConnectionState = "loading" | "demo" | "live" | "cached" | "unavailable";
 
@@ -23,6 +24,7 @@ interface FinanceContextValue {
   connectionError: string | null;
   reload: () => Promise<void>;
   addTransaction: (draft: TransactionDraft) => Promise<FinanceTransaction>;
+  addTransactions: (drafts: TransactionDraft[], onProgress?: (completed: number, total: number) => void) => Promise<FinanceTransaction[]>;
   updateTransaction: (id: string, draft: TransactionDraft) => Promise<FinanceTransaction>;
   deleteTransaction: (id: string) => Promise<void>;
   addAccount: (account: AccountDraft) => Promise<void>;
@@ -32,6 +34,14 @@ interface FinanceContextValue {
   loadAccountTransactions: (accountId: string) => Promise<FinanceTransaction[]>;
   addCategory: (category: CategoryDraft) => Promise<void>;
   archiveCategory: (id: string) => Promise<void>;
+  loadImportCandidates: (accountId: string, startDate: string, endDate: string) => Promise<FinanceTransaction[]>;
+  findImportByHash: (fileHash: string) => Promise<ImportHistoryItem | undefined>;
+  createImport: (draft: ImportHistoryDraft) => Promise<ImportHistoryItem>;
+  completeImport: (id: string, completion: ImportCompletion) => Promise<ImportHistoryItem>;
+  saveMerchantRule: (draft: MerchantRuleDraft) => Promise<MerchantRule>;
+  updateMerchantRule: (id: string, categoryId: string) => Promise<MerchantRule>;
+  deleteMerchantRule: (id: string) => Promise<void>;
+  uploadReceipt: (transactionId: string, file: File, ocrResult: Record<string, unknown>) => Promise<string | undefined>;
   addBudget: (budget: Omit<Budget, "id">) => Promise<void>;
   addGoal: (goal: Omit<Goal, "id">) => Promise<void>;
   addGoalContribution: (draft: GoalContributionDraft) => Promise<void>;
@@ -58,6 +68,8 @@ const emptyFinanceData: FinanceData = {
   recurring: [],
   notifications: [],
   notificationPreferences: { pushEnabled: false },
+  merchantRules: [],
+  imports: [],
 };
 const encode = (data: FinanceData) => JSON.stringify(data, (_, value) => typeof value === "bigint" ? `${value}n` : value);
 const decode = (raw: string): FinanceData => {
@@ -68,6 +80,8 @@ const decode = (raw: string): FinanceData => {
     goalContributions: parsed.goalContributions ?? [],
     notifications: parsed.notifications ?? [],
     notificationPreferences: parsed.notificationPreferences ?? { pushEnabled: false },
+    merchantRules: parsed.merchantRules ?? [],
+    imports: parsed.imports ?? [],
   };
 };
 const withoutSyncedBalances = (accounts: Account[]) => accounts.map((account) => {
@@ -76,6 +90,35 @@ const withoutSyncedBalances = (accounts: Account[]) => accounts.map((account) =>
   return copy;
 });
 const authFailureMessage = (error: { code?: string } | null, fallback: string) => error?.code ? `${fallback} (${error.code})` : fallback;
+const localTransaction = (draft: TransactionDraft, data: FinanceData): FinanceTransaction => {
+  const now = new Date().toISOString();
+  return {
+    id: crypto.randomUUID(),
+    accountId: draft.accountId,
+    transferAccountId: draft.transferAccountId,
+    categoryId: draft.categoryId,
+    type: draft.type,
+    amountMinor: parseMoney(draft.amount),
+    currency: data.profile.currency,
+    date: draft.date,
+    merchant: draft.merchant,
+    description: draft.description,
+    notes: draft.notes,
+    tags: draft.tags ?? [],
+    paymentMethod: draft.paymentMethod,
+    source: draft.source ?? "manual",
+    reference: draft.reference,
+    refundOfId: draft.refundOfId,
+    duplicateOfId: draft.duplicateOfId,
+    importId: draft.importId,
+    reviewStatus: draft.reviewStatus ?? "confirmed",
+    metadata: draft.metadata,
+    loanPrincipalMinor: draft.loanPrincipal ? parseMoney(draft.loanPrincipal) : undefined,
+    loanInterestMinor: draft.loanInterest ? parseMoney(draft.loanInterest) : undefined,
+    createdAt: now,
+    updatedAt: now,
+  };
+};
 
 export function FinanceProvider({ children }: { children: React.ReactNode }) {
   const [data, setData] = useState<FinanceData>(emptyFinanceData);
@@ -89,6 +132,7 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
   const authenticatedUserId = useRef<string | null>(null);
   const loadGeneration = useRef(0);
   const authReloadTimer = useRef<number | null>(null);
+  const pendingImportHistory = useRef(new Map<string, ImportHistoryItem>());
 
   const load = useCallback(async () => {
     const generation = ++loadGeneration.current;
@@ -330,7 +374,7 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     }
 
     const now = new Date().toISOString();
-    const created: FinanceTransaction = { id: crypto.randomUUID(), accountId: draft.accountId, transferAccountId: draft.transferAccountId, categoryId: draft.categoryId, type: draft.type, amountMinor: parseMoney(draft.amount), currency: data.profile.currency, date: draft.date, merchant: draft.merchant, notes: draft.notes, tags: draft.tags ?? [], paymentMethod: draft.paymentMethod, source: draft.source ?? "manual", refundOfId: draft.refundOfId, loanPrincipalMinor: draft.loanPrincipal ? parseMoney(draft.loanPrincipal) : undefined, loanInterestMinor: draft.loanInterest ? parseMoney(draft.loanInterest) : undefined, createdAt: now, updatedAt: now };
+    const created = localTransaction(draft, data);
     setData((current) => ({ ...current, accounts: withoutSyncedBalances(current.accounts), transactions: [created, ...current.transactions] }));
     if (repository && !navigator.onLine) {
       await enqueue({ id: crypto.randomUUID(), userId: data.profile.id, entity: "transaction", operation: "insert", payload: { ...draft }, createdAt: now });
@@ -338,7 +382,32 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
       toast.info("Saved offline. This transaction will sync when you reconnect.");
     }
     return created;
-  }, [data.demo, data.profile.currency, data.profile.id, load, repository]);
+  }, [data, load, repository]);
+
+  const addTransactions = useCallback(async (drafts: TransactionDraft[], onProgress?: (completed: number, total: number) => void) => {
+    if (!drafts.length) return [];
+    if (repository && !data.demo) {
+      if (!navigator.onLine) throw new Error("Connect to the internet before confirming a statement import. Your review remains on this device.");
+      setSyncStatus("syncing");
+      try {
+        const created = await repository.createTransactions(data.profile.id, drafts, data.profile.currency, onProgress);
+        setData((current) => ({ ...current, accounts: withoutSyncedBalances(current.accounts), transactions: [...created, ...current.transactions] }));
+        await load();
+        setSyncStatus("synced");
+        return created;
+      } catch (error) {
+        setSyncStatus("failed");
+        // Earlier batches may already be committed. Refresh the owner-scoped
+        // workspace so the review screen never suggests those rows vanished.
+        try { await load(); } catch { /* Preserve the original import error. */ }
+        throw error;
+      }
+    }
+    const created = drafts.map((draft) => localTransaction(draft, data));
+    setData((current) => ({ ...current, accounts: withoutSyncedBalances(current.accounts), transactions: [...created, ...current.transactions] }));
+    onProgress?.(created.length, created.length);
+    return created;
+  }, [data, load, repository]);
 
   const deleteTransaction = useCallback(async (id: string) => {
     if (repository && !data.demo) await repository.deleteTransaction(id);
@@ -404,8 +473,88 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
 
   const archiveCategory = useCallback(async (id: string) => {
     if (repository && !data.demo) await repository.archiveCategory(id);
-    setData((current) => ({ ...current, categories: current.categories.map((category) => category.id === id ? { ...category, archived: true } : category) }));
-  }, [data.demo, repository]);
+    setData((current) => {
+      const uncategorizedId = current.categories.find((category) => category.name.toLowerCase() === "uncategorized" && !category.archived)?.id;
+      return {
+        ...current,
+        categories: current.categories.map((category) => category.id === id ? { ...category, archived: true } : category),
+        transactions: uncategorizedId ? current.transactions.map((transaction) => transaction.categoryId === id ? { ...transaction, categoryId: uncategorizedId } : transaction) : current.transactions,
+        merchantRules: current.merchantRules.map((rule) => rule.categoryId === id ? { ...rule, categoryId: uncategorizedId, enabled: false } : rule),
+      };
+    });
+    if (repository && !data.demo) await load();
+  }, [data.demo, load, repository]);
+
+  const loadImportCandidates = useCallback(async (accountId: string, startDate: string, endDate: string) => {
+    if (repository && !data.demo) return repository.loadImportCandidates(data.profile.id, accountId, startDate, endDate);
+    return data.transactions.filter((transaction) =>
+      (transaction.accountId === accountId || transaction.transferAccountId === accountId)
+      && transaction.date >= startDate
+      && transaction.date <= endDate,
+    );
+  }, [data.demo, data.profile.id, data.transactions, repository]);
+
+  const findImportByHash = useCallback(async (fileHash: string) => {
+    if (repository && !data.demo) return repository.findImportByHash(data.profile.id, fileHash);
+    return data.imports.find((item) => item.fileHash === fileHash && item.status !== "failed");
+  }, [data.demo, data.imports, data.profile.id, repository]);
+
+  const createImport = useCallback(async (draft: ImportHistoryDraft) => {
+    const created = repository && !data.demo
+      ? await repository.createImport(data.profile.id, draft)
+      : { id: crypto.randomUUID(), ...draft, sourceKind: draft.sourceKind ?? "statement", status: "review" as const, importedRows: 0, skippedRows: 0, duplicateRows: 0, failedRows: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    pendingImportHistory.current.set(created.id, created);
+    setData((current) => ({ ...current, imports: [created, ...current.imports] }));
+    return created;
+  }, [data.demo, data.profile.id, repository]);
+
+  const completeImport = useCallback(async (id: string, completion: ImportCompletion) => {
+    const existing = pendingImportHistory.current.get(id) ?? data.imports.find((item) => item.id === id);
+    if (!existing) throw new Error("Import history record was not found.");
+    const completed = repository && !data.demo
+      ? await repository.completeImport(data.profile.id, id, completion)
+      : { ...existing, ...completion, status: completion.errorMessage && completion.importedRows === 0 ? "failed" as const : "imported" as const, updatedAt: new Date().toISOString() };
+    pendingImportHistory.current.set(id, completed);
+    setData((current) => ({ ...current, imports: current.imports.map((item) => item.id === id ? completed : item) }));
+    return completed;
+  }, [data.demo, data.imports, data.profile.id, repository]);
+
+  const saveMerchantRule = useCallback(async (draft: MerchantRuleDraft) => {
+    const saved = repository && !data.demo
+      ? await repository.saveMerchantRule(data.profile.id, draft)
+      : (() => {
+          const previous = data.merchantRules.find((rule) => rule.merchantNormalized === draft.merchantNormalized);
+          return previous
+            ? { ...previous, pattern: draft.pattern, categoryId: draft.categoryId, accountId: draft.accountId, transactionType: draft.transactionType, enabled: true }
+            : { id: crypto.randomUUID(), ...draft, matchType: "exact" as const, priority: 100, enabled: true, applicationCount: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+        })();
+    setData((current) => ({ ...current, merchantRules: [saved, ...current.merchantRules.filter((rule) => rule.id !== saved.id)] }));
+    return saved;
+  }, [data.demo, data.merchantRules, data.profile.id, repository]);
+
+  const updateMerchantRule = useCallback(async (id: string, categoryId: string) => {
+    const updated = repository && !data.demo
+      ? await repository.updateMerchantRule(data.profile.id, id, categoryId)
+      : (() => {
+          const previous = data.merchantRules.find((rule) => rule.id === id);
+          if (!previous) throw new Error("Merchant rule was not found.");
+          return { ...previous, categoryId, enabled: true, updatedAt: new Date().toISOString() };
+        })();
+    setData((current) => ({ ...current, merchantRules: current.merchantRules.map((rule) => rule.id === id ? updated : rule) }));
+    return updated;
+  }, [data.demo, data.merchantRules, data.profile.id, repository]);
+
+  const deleteMerchantRule = useCallback(async (id: string) => {
+    if (repository && !data.demo) await repository.deleteMerchantRule(data.profile.id, id);
+    setData((current) => ({ ...current, merchantRules: current.merchantRules.filter((rule) => rule.id !== id) }));
+  }, [data.demo, data.profile.id, repository]);
+
+  const uploadReceipt = useCallback(async (transactionId: string, file: File, ocrResult: Record<string, unknown>) => {
+    const { extension } = validateReceiptFile(file);
+    if (!repository || data.demo) return undefined;
+    const checksum = await sha256File(file);
+    return repository.uploadReceipt(data.profile.id, transactionId, file, extension, checksum, ocrResult as never);
+  }, [data.demo, data.profile.id, repository]);
 
   const addBudget = useCallback(async (budget: Omit<Budget, "id">) => {
     const created = repository && !data.demo ? await repository.createBudget(data.profile.id, budget) : { ...budget, id: crypto.randomUUID() };
@@ -477,7 +626,7 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     setData(demoData);
   }, []);
 
-  return <FinanceContext.Provider value={{ data, loading, syncStatus, connectionState, connectionError, reload: load, addTransaction, updateTransaction, deleteTransaction, addAccount, updateAccount, deleteAccount, archiveAccount, loadAccountTransactions, addCategory, archiveCategory, addBudget, addGoal, addGoalContribution, updateGoalContribution, deleteGoalContribution, setPushNotifications, addRecurringItem, updateProfile, resetDemo }}>{children}</FinanceContext.Provider>;
+  return <FinanceContext.Provider value={{ data, loading, syncStatus, connectionState, connectionError, reload: load, addTransaction, addTransactions, updateTransaction, deleteTransaction, addAccount, updateAccount, deleteAccount, archiveAccount, loadAccountTransactions, addCategory, archiveCategory, loadImportCandidates, findImportByHash, createImport, completeImport, saveMerchantRule, updateMerchantRule, deleteMerchantRule, uploadReceipt, addBudget, addGoal, addGoalContribution, updateGoalContribution, deleteGoalContribution, setPushNotifications, addRecurringItem, updateProfile, resetDemo }}>{children}</FinanceContext.Provider>;
 }
 
 export function useFinance() {

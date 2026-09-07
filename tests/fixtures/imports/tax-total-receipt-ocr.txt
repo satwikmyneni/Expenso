@@ -1,0 +1,7 @@
+SAMPLE CAFE
+Invoice Number CAFE-55
+Subtotal 900.00
+CGST 45.00
+SGST 45.00
+Grand Total INR 990.00
+05-09-2026

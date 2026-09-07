@@ -29,6 +29,7 @@
     "lucide-react": "^0.468.0",
     "next": "^16.3.4",
     "papaparse": "^5.4.1",
+    "pdfjs-dist": "^6.3.289",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-hook-form": "^7.54.2",
@@ -37,6 +38,8 @@
     "recharts": "^3.10.1",
     "sonner": "^1.7.1",
     "tailwind-merge": "^2.6.0",
+    "tesseract.js": "^7.0.0",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^3.24.1"
   },
   "devDependencies": {

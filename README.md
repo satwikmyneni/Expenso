@@ -9,8 +9,10 @@ Expenso is a private, multi-user personal finance PWA for expenses, accounts, bu
 - Responsive mobile bottom navigation and dedicated desktop sidebar/table layouts.
 - Transaction create, edit (including historical dates), delete, search, combined filters, exact balance/report recalculation, duplicate warnings, transfers, and refunds.
 - Accounts, budgets, goals, recurring payments, bills, subscriptions, calendar, deterministic insights, exports, and structured backups.
-- Review-first CSV/TXT/XLSX imports with common Indian bank headings and Indian number formats.
-- Voice entry with confirmation and deterministic, user-scoped financial insights. AI and image OCR are intentionally disabled.
+- Review-first PDF/CSV/TXT/XLS/XLSX imports with Indian bank headings, UPI normalization, transfer/refund review, and explicit duplicate decisions.
+- Local browser OCR for JPG/JPEG/PNG/WEBP/PDF receipts and UPI screenshots, followed by an editable preview and optional private receipt attachment.
+- Deterministic categorization in the order personal rule, exact registry, specific keyword, consistent confirmed history, then protected Uncategorized. No AI/LLM provider is used.
+- Voice entry with confirmation and deterministic, user-scoped financial insights.
 - PWA manifest, service-worker shell cache, IndexedDB offline mutation queue, retry state, and user-scoped Realtime refresh.
 - Realistic, explicitly entered and clearly labeled sample workspace that never impersonates live data.
 
@@ -65,6 +67,8 @@ The RLS suite needs the local Supabase stack. E2E tests start the Next.js dev se
 | `AI_API_KEY` | Server only | Reserved; leave blank |
 
 Never expose a service-role or any future provider key through a `NEXT_PUBLIC_` variable.
+
+Statement parsing and OCR require no additional environment variables or API keys. Tesseract.js performs recognition in a browser Web Worker; the worker/core/English language assets are downloaded from its versioned jsDelivr packages and cached by the browser, while the selected receipt image remains on the device until an optional post-confirmation attachment upload.
 
 ## Documentation
 

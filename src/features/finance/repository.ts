@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { Database, Tables, TablesInsert, TablesUpdate } from "@/lib/supabase/database.types";
+import type { Database, Json, Tables, TablesInsert, TablesUpdate } from "@/lib/supabase/database.types";
 import { dataError } from "@/lib/data-error";
 import type {
   Account,
@@ -13,6 +13,11 @@ import type {
   Goal,
   GoalContribution,
   GoalContributionDraft,
+  ImportCompletion,
+  ImportHistoryDraft,
+  ImportHistoryItem,
+  MerchantRule,
+  MerchantRuleDraft,
   Profile,
   ProfileDraft,
   RecurringDraft,
@@ -30,6 +35,8 @@ type BudgetRow = Tables<"budgets">;
 type GoalRow = Tables<"goals">;
 type GoalContributionRow = Tables<"goal_contributions">;
 type NotificationRow = Tables<"notifications">;
+type MerchantRuleRow = Tables<"merchant_rules">;
+type ImportRow = Tables<"imports">;
 type RecurringRow = Tables<"recurring_transactions">;
 type SubscriptionRow = Tables<"subscriptions">;
 type BillRow = Tables<"bills">;
@@ -61,6 +68,40 @@ const databaseNumber = (minor: bigint) => minorToDecimal(minor) as unknown as nu
 const optionalDatabaseNumber = (minor: bigint | undefined) => minor === undefined ? null : databaseNumber(minor);
 const decimalMinor = (value: number | null | undefined) => parseMoney(String(value ?? 0));
 const optionalDecimalMinor = (value: number | null | undefined) => value == null ? undefined : decimalMinor(value);
+
+function transactionMetadata(draft: TransactionDraft): Json {
+  const metadata = { ...(draft.metadata ?? {}) } as Record<string, Json | undefined>;
+  if (draft.type === "transfer" && draft.loanPrincipal && draft.loanInterest) {
+    metadata.loan_principal = minorToDecimal(parseMoney(draft.loanPrincipal));
+    metadata.loan_interest = minorToDecimal(parseMoney(draft.loanInterest));
+  }
+  return Object.fromEntries(Object.entries(metadata).filter((entry): entry is [string, Json] => entry[1] !== undefined));
+}
+
+function transactionInsert(userId: string, draft: TransactionDraft, currency: string): TablesInsert<"transactions"> {
+  return {
+    user_id: userId,
+    account_id: draft.accountId,
+    transfer_account_id: draft.transferAccountId || null,
+    category_id: draft.categoryId || null,
+    type: draft.type,
+    amount: databaseNumber(parseMoney(draft.amount)),
+    currency,
+    occurred_at: new Date(`${draft.date}T12:00:00`).toISOString(),
+    merchant: draft.merchant.trim(),
+    description: draft.description?.trim() || null,
+    notes: draft.notes?.trim() || null,
+    tags: draft.tags ?? [],
+    payment_method: draft.paymentMethod || null,
+    source: draft.source ?? "manual",
+    reference: draft.reference?.trim() || null,
+    import_id: draft.importId || null,
+    duplicate_of_id: draft.duplicateOfId || null,
+    review_status: draft.reviewStatus ?? "confirmed",
+    refund_of_id: draft.type === "refund" ? draft.refundOfId || null : null,
+    metadata: transactionMetadata(draft),
+  };
+}
 
 function mapAccount(row: AccountRow, balance?: AccountBalanceRow): Account {
   return {
@@ -125,6 +166,9 @@ function mapTransaction(row: TransactionRow): FinanceTransaction {
     duplicateOfId: row.duplicate_of_id ?? undefined,
     loanPrincipalMinor: typeof loanPrincipal === "string" || typeof loanPrincipal === "number" ? parseMoney(String(loanPrincipal)) : undefined,
     loanInterestMinor: typeof loanInterest === "string" || typeof loanInterest === "number" ? parseMoney(String(loanInterest)) : undefined,
+    importId: row.import_id ?? undefined,
+    reviewStatus: row.review_status === "needs_review" || row.review_status === "ignored" || row.review_status === "duplicate" ? row.review_status : "confirmed",
+    metadata: metadata as Record<string, unknown>,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -172,6 +216,43 @@ function mapGoalContribution(row: GoalContributionRow): GoalContribution {
 
 function mapNotification(row: NotificationRow): FinanceNotification {
   return { id: row.id, kind: row.kind, title: row.title, body: row.body, actionUrl: row.action_url ?? undefined, dedupeKey: row.dedupe_key ?? undefined, readAt: row.read_at ?? undefined, createdAt: row.created_at };
+}
+
+function mapMerchantRule(row: MerchantRuleRow): MerchantRule {
+  return {
+    id: row.id,
+    pattern: row.pattern,
+    merchantNormalized: row.merchant_normalized,
+    matchType: row.match_type === "contains" || row.match_type === "regex" ? row.match_type : "exact",
+    categoryId: row.category_id ?? undefined,
+    accountId: row.account_id ?? undefined,
+    transactionType: row.transaction_type ?? undefined,
+    priority: row.priority,
+    enabled: row.enabled,
+    applicationCount: row.application_count,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapImport(row: ImportRow): ImportHistoryItem {
+  return {
+    id: row.id,
+    accountId: row.account_id ?? undefined,
+    fileName: row.file_name,
+    fileType: row.file_type,
+    fileHash: row.file_hash ?? undefined,
+    sourceKind: row.source_kind === "receipt_ocr" ? "receipt_ocr" : "statement",
+    status: row.status,
+    totalRows: row.total_rows,
+    importedRows: row.imported_rows,
+    skippedRows: row.skipped_rows,
+    duplicateRows: row.duplicate_rows,
+    failedRows: row.failed_rows,
+    errorMessage: row.error_message ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
 }
 
 function recurringFrequency(value: string): RecurringItem["frequency"] {
@@ -228,7 +309,7 @@ export class FinanceRepository {
 
   async load(userId: string, email: string, firstName?: string): Promise<FinanceData> {
     const loadOnce = async () => {
-      const [profile, accounts, balances, categories, transactions, budgets, goals, goalContributions, recurring, subscriptions, bills, notifications, notificationPreferences] = await Promise.all([
+      const [profile, accounts, balances, categories, transactions, budgets, goals, goalContributions, recurring, subscriptions, bills, notifications, notificationPreferences, merchantRules, imports] = await Promise.all([
         this.client.from("profiles").select("*").eq("id", userId).single(),
         this.client.from("accounts").select("*").order("created_at"),
         this.client.from("account_balances").select("*"),
@@ -242,13 +323,15 @@ export class FinanceRepository {
         this.client.from("bills").select("*").in("status", ["upcoming", "overdue", "due"]),
         this.client.from("notifications").select("*").order("created_at", { ascending: false }).limit(100),
         this.client.from("notification_preferences").select("*").eq("user_id", userId).single(),
+        this.client.from("merchant_rules").select("*").order("priority", { ascending: false }),
+        this.client.from("imports").select("*").order("created_at", { ascending: false }).limit(50),
       ]);
-      const firstError = [profile, accounts, balances, categories, transactions, budgets, goals, goalContributions, recurring, subscriptions, bills, notifications, notificationPreferences].find((result) => result.error)?.error;
-      return { profile, accounts, balances, categories, transactions, budgets, goals, goalContributions, recurring, subscriptions, bills, notifications, notificationPreferences, firstError };
+      const firstError = [profile, accounts, balances, categories, transactions, budgets, goals, goalContributions, recurring, subscriptions, bills, notifications, notificationPreferences, merchantRules, imports].find((result) => result.error)?.error;
+      return { profile, accounts, balances, categories, transactions, budgets, goals, goalContributions, recurring, subscriptions, bills, notifications, notificationPreferences, merchantRules, imports, firstError };
     };
 
     const loaded = await retryJwtIssuedAtFuture(loadOnce, (result) => result.firstError);
-    const { profile, accounts, balances, categories, transactions, budgets, goals, goalContributions, recurring, subscriptions, bills, notifications, notificationPreferences, firstError } = loaded;
+    const { profile, accounts, balances, categories, transactions, budgets, goals, goalContributions, recurring, subscriptions, bills, notifications, notificationPreferences, merchantRules, imports, firstError } = loaded;
     if (firstError) throw dataError(firstError, "load");
 
     const balanceById = new Map((balances.data ?? []).filter((row) => row.id).map((row) => [row.id as string, row]));
@@ -268,30 +351,26 @@ export class FinanceRepository {
       ],
       notifications: (notifications.data ?? []).map(mapNotification),
       notificationPreferences: { pushEnabled: notificationPreferences.data?.push_enabled ?? false },
+      merchantRules: (merchantRules.data ?? []).map(mapMerchantRule),
+      imports: (imports.data ?? []).map(mapImport),
     };
   }
 
   async createTransaction(userId: string, draft: TransactionDraft, currency: string) {
-    const payload: TablesInsert<"transactions"> = {
-      user_id: userId,
-      account_id: draft.accountId,
-      transfer_account_id: draft.transferAccountId || null,
-      category_id: draft.categoryId || null,
-      type: draft.type,
-      amount: databaseNumber(parseMoney(draft.amount)),
-      currency,
-      occurred_at: new Date(`${draft.date}T12:00:00`).toISOString(),
-      merchant: draft.merchant.trim(),
-      notes: draft.notes?.trim() || null,
-      tags: draft.tags ?? [],
-      payment_method: draft.paymentMethod || null,
-      source: draft.source ?? "manual",
-      refund_of_id: draft.type === "refund" ? draft.refundOfId || null : null,
-      metadata: draft.type === "transfer" && draft.loanPrincipal && draft.loanInterest ? { loan_principal: minorToDecimal(parseMoney(draft.loanPrincipal)), loan_interest: minorToDecimal(parseMoney(draft.loanInterest)) } : {},
-    };
-    const result = await this.client.from("transactions").insert(payload).select("*").single();
-    if (result.error) throw dataError(result.error);
-    return mapTransaction(result.data);
+    const [created] = await this.createTransactions(userId, [draft], currency);
+    return created;
+  }
+
+  async createTransactions(userId: string, drafts: TransactionDraft[], currency: string, onProgress?: (completed: number, total: number) => void) {
+    const created: FinanceTransaction[] = [];
+    for (let index = 0; index < drafts.length; index += 50) {
+      const payload = drafts.slice(index, index + 50).map((draft) => transactionInsert(userId, draft, currency));
+      const result = await this.client.from("transactions").insert(payload).select("*");
+      if (result.error) throw dataError(result.error);
+      created.push(...(result.data ?? []).map(mapTransaction));
+      onProgress?.(Math.min(index + payload.length, drafts.length), drafts.length);
+    }
+    return created;
   }
 
   async updateTransaction(id: string, draft: TransactionDraft) {
@@ -303,11 +382,17 @@ export class FinanceRepository {
       amount: databaseNumber(parseMoney(draft.amount)),
       occurred_at: new Date(`${draft.date}T12:00:00`).toISOString(),
       merchant: draft.merchant.trim(),
+      description: draft.description?.trim() || null,
       notes: draft.notes?.trim() || null,
       payment_method: draft.paymentMethod || null,
       tags: draft.tags ?? [],
+      source: draft.source ?? "manual",
+      reference: draft.reference?.trim() || null,
+      import_id: draft.importId || null,
+      duplicate_of_id: draft.duplicateOfId || null,
+      review_status: draft.reviewStatus ?? "confirmed",
       refund_of_id: draft.type === "refund" ? draft.refundOfId || null : null,
-      metadata: draft.type === "transfer" && draft.loanPrincipal && draft.loanInterest ? { loan_principal: minorToDecimal(parseMoney(draft.loanPrincipal)), loan_interest: minorToDecimal(parseMoney(draft.loanInterest)) } : {},
+      metadata: transactionMetadata(draft),
     };
     const result = await this.client.from("transactions").update(payload).eq("id", id).select("*").single();
     if (result.error) throw dataError(result.error);
@@ -370,8 +455,127 @@ export class FinanceRepository {
   }
 
   async archiveCategory(id: string) {
-    const result = await this.client.from("categories").update({ archived_at: new Date().toISOString() }).eq("id", id);
+    const result = await this.client.rpc("archive_category_safely", { target_category_id: id });
     if (result.error) throw dataError(result.error, "delete");
+  }
+
+  async findImportByHash(userId: string, fileHash: string) {
+    const result = await this.client.from("imports").select("*").eq("user_id", userId).eq("file_hash", fileHash).neq("status", "failed").order("created_at", { ascending: false }).limit(1).maybeSingle();
+    if (result.error) throw dataError(result.error, "load");
+    return result.data ? mapImport(result.data) : undefined;
+  }
+
+  async createImport(userId: string, draft: ImportHistoryDraft) {
+    const payload: TablesInsert<"imports"> = {
+      user_id: userId,
+      account_id: draft.accountId,
+      file_name: draft.fileName.slice(0, 255),
+      file_type: draft.fileType,
+      file_hash: draft.fileHash,
+      source_kind: draft.sourceKind ?? "statement",
+      status: "review",
+      total_rows: draft.totalRows,
+    };
+    const result = await this.client.from("imports").insert(payload).select("*").single();
+    if (result.error) throw dataError(result.error);
+    return mapImport(result.data);
+  }
+
+  async completeImport(userId: string, id: string, completion: ImportCompletion) {
+    const payload: TablesUpdate<"imports"> = {
+      status: completion.errorMessage && completion.importedRows === 0 ? "failed" : "imported",
+      imported_rows: completion.importedRows,
+      skipped_rows: completion.skippedRows,
+      duplicate_rows: completion.duplicateRows,
+      failed_rows: completion.failedRows,
+      error_message: completion.errorMessage ?? null,
+    };
+    const result = await this.client.from("imports").update(payload).eq("id", id).eq("user_id", userId).select("*").single();
+    if (result.error) throw dataError(result.error);
+    return mapImport(result.data);
+  }
+
+  async loadImportCandidates(userId: string, accountId: string, startDate: string, endDate: string) {
+    const pageSize = 1000;
+    const rows: TransactionRow[] = [];
+    for (let from = 0; ; from += pageSize) {
+      const result = await this.client
+        .from("transactions")
+        .select("*")
+        .eq("user_id", userId)
+        .or(`account_id.eq.${accountId},transfer_account_id.eq.${accountId}`)
+        .gte("occurred_at", `${startDate}T00:00:00.000Z`)
+        .lte("occurred_at", `${endDate}T23:59:59.999Z`)
+        .order("occurred_at", { ascending: false })
+        .range(from, from + pageSize - 1);
+      if (result.error) throw dataError(result.error, "load");
+      rows.push(...(result.data ?? []));
+      if ((result.data?.length ?? 0) < pageSize) return rows.map(mapTransaction);
+    }
+  }
+
+  async saveMerchantRule(userId: string, draft: MerchantRuleDraft) {
+    let existingQuery = this.client
+      .from("merchant_rules")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("merchant_normalized", draft.merchantNormalized)
+      .eq("match_type", "exact");
+    existingQuery = draft.accountId ? existingQuery.eq("account_id", draft.accountId) : existingQuery.is("account_id", null);
+    existingQuery = draft.transactionType ? existingQuery.eq("transaction_type", draft.transactionType) : existingQuery.is("transaction_type", null);
+    const existing = await existingQuery
+      .order("priority", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (existing.error) throw dataError(existing.error, "load");
+    const values = {
+      pattern: draft.pattern,
+      merchant_normalized: draft.merchantNormalized,
+      match_type: "exact",
+      category_id: draft.categoryId,
+      account_id: draft.accountId ?? null,
+      transaction_type: draft.transactionType ?? null,
+      priority: 100,
+      enabled: true,
+    } satisfies TablesUpdate<"merchant_rules">;
+    const result = existing.data
+      ? await this.client.from("merchant_rules").update(values).eq("id", existing.data.id).eq("user_id", userId).select("*").single()
+      : await this.client.from("merchant_rules").insert({ ...values, user_id: userId } satisfies TablesInsert<"merchant_rules">).select("*").single();
+    if (result.error) throw dataError(result.error);
+    return mapMerchantRule(result.data);
+  }
+
+  async updateMerchantRule(userId: string, id: string, categoryId: string) {
+    const result = await this.client.from("merchant_rules").update({ category_id: categoryId, enabled: true }).eq("id", id).eq("user_id", userId).select("*").single();
+    if (result.error) throw dataError(result.error);
+    return mapMerchantRule(result.data);
+  }
+
+  async deleteMerchantRule(userId: string, id: string) {
+    const result = await this.client.from("merchant_rules").delete().eq("id", id).eq("user_id", userId);
+    if (result.error) throw dataError(result.error, "delete");
+  }
+
+  async uploadReceipt(userId: string, transactionId: string, file: File, extension: string, checksum: string, ocrResult: Json) {
+    const storagePath = `${userId}/receipts/${crypto.randomUUID()}.${extension}`;
+    const upload = await this.client.storage.from("receipts").upload(storagePath, file, { contentType: file.type, upsert: false });
+    if (upload.error) throw new Error("The transaction was saved, but its receipt could not be stored securely.");
+    const attachment = await this.client.from("attachments").insert({
+      user_id: userId,
+      transaction_id: transactionId,
+      storage_path: storagePath,
+      file_name: file.name.slice(0, 255),
+      content_type: file.type,
+      size_bytes: file.size,
+      checksum,
+      ocr_status: "completed",
+      ocr_result: ocrResult,
+    }).select("id").single();
+    if (attachment.error) {
+      await this.client.storage.from("receipts").remove([storagePath]);
+      throw new Error("The transaction was saved, but its receipt record could not be created.");
+    }
+    return attachment.data.id;
   }
 
   async createBudget(userId: string, budget: Omit<Budget, "id">): Promise<Budget> {

@@ -24,6 +24,7 @@ export const demoData: FinanceData = {
     { id: "housing", name: "Housing", icon: "House", color: categoryPalette[6], kind: "expense" },
     { id: "income", name: "Income", icon: "Landmark", color: categoryPalette[7], kind: "income" },
     { id: "travel", name: "Travel", icon: "Plane", color: categoryPalette[8], kind: "expense" },
+    { id: "uncategorized", name: "Uncategorized", icon: "CircleHelp", color: financeColors.neutral, kind: "both", isDefault: true },
   ],
   transactions: [
     tx("t01", "hdfc", "income", "income", 12500000n, "2026-09-01", "Acme Studios", "September salary", { source: "recurring" }),
@@ -83,4 +84,6 @@ export const demoData: FinanceData = {
   ],
   notifications: [],
   notificationPreferences: { pushEnabled: false },
+  merchantRules: [],
+  imports: [],
 };

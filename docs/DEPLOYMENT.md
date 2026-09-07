@@ -34,6 +34,38 @@ where oid in ('public.accounts'::regclass, 'public.goal_contributions'::regclass
 
 Expected: authenticated account DELETE is `true`, anon DELETE is `false`, every policy is owner-scoped, and RLS plus forced RLS are both enabled. Then create an empty test account through Expenso and delete it; create a second account with one transaction and confirm Delete offers archive instead of destroying history.
 
+### Statement import and receipt OCR
+
+Apply `202609060001_add_deterministic_import_workflow.sql` after the existing 2026-09-05 migrations. It extends the existing owner-scoped import and merchant-rule tables, creates each profile's protected Uncategorized category, and adds a safe category-archive function. It does not alter auth triggers, relax RLS, or make the receipt bucket public.
+
+No OCR API key or additional environment variable is required. Tesseract.js runs recognition in the browser, PDF.js handles text-first PDF extraction/rendering, and SheetJS reads XLS/XLSX locally. The Content Security Policy permits jsDelivr so Tesseract can download its versioned worker/core/language packages; receipt bytes are not posted there. A Netlify Next.js deployment can use the same browser workflow because OCR does not run in a Netlify Function. Users need network access the first time the browser downloads OCR runtime/language assets; the browser can cache them afterward.
+
+After deployment, verify the migration and private storage boundary:
+
+```sql
+select column_name
+from information_schema.columns
+where table_schema = 'public'
+  and table_name in ('imports', 'merchant_rules')
+  and column_name in ('source_kind', 'duplicate_rows', 'failed_rows', 'merchant_normalized')
+order by column_name;
+
+select relname, relrowsecurity, relforcerowsecurity
+from pg_class
+where oid in (
+  'public.imports'::regclass,
+  'public.import_rows'::regclass,
+  'public.merchant_rules'::regclass,
+  'public.attachments'::regclass
+);
+
+select id, public, file_size_limit, allowed_mime_types
+from storage.buckets
+where id = 'receipts';
+```
+
+Expected: all four migration columns exist; every listed table has RLS and forced RLS enabled; and `receipts` is private with the existing 10 MB image/PDF restrictions.
+
 ## Google, Apple, and Microsoft sign-in
 
 Provider credentials belong in the provider console and **Supabase Dashboard → Authentication → Providers**. They are not application environment variables and must never be placed in frontend code or committed files.
@@ -85,8 +117,8 @@ Supabase Auth automatically links a new OAuth identity to an existing user when 
 5. Create two genuinely different users and repeat the RLS isolation scenario.
 6. Add and edit a historical expense; confirm account, budget, dashboard, and insights change.
 7. Test transfers and refunds without spending double-counting.
-8. Import a statement, review invalid/duplicate rows, and export the result.
-9. Verify the private receipt bucket policies with two authenticated test users before adding receipt upload UI.
+8. Import sanitized PDF/CSV/TXT/XLS/XLSX statements, edit and confirm selected rows, then repeat the same file and verify duplicate choices appear.
+9. Scan a sanitized image and PDF receipt on iPhone and Windows, edit the preview, confirm it, and verify the optional attachment is private. Verify the receipt bucket policies with two authenticated test users.
 10. Install the PWA; test offline launch, queued entry, and reconnect sync.
 11. Open the same user on two devices and confirm Realtime refresh.
 12. Check iPhone-sized and Windows desktop layouts, keyboard focus, dark theme, and reduced motion.

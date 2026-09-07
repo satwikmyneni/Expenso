@@ -1,0 +1,9 @@
+{
+  "description": "Sanitized image/OCR fixture metadata. No real financial information.",
+  "fixtures": [
+    { "kind": "scanned_receipt", "mime": "image/png", "image": "synthetic-restaurant-receipt.png", "ocr_text": "restaurant-receipt-ocr.txt" },
+    { "kind": "upi_screenshot", "mime": "image/png", "image": "synthetic-upi-screenshot.png", "ocr_text": "upi-payment-ocr.txt" },
+    { "kind": "tax_and_total", "mime": "image/jpeg", "ocr_text": "tax-total-receipt-ocr.txt" },
+    { "kind": "unreadable", "mime": "image/webp", "ocr_text": "unreadable-receipt-ocr.txt" }
+  ]
+}

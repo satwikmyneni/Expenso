@@ -1,0 +1,7 @@
+Payment successful
+Paid to
+MC DONALDS
+₹156.44
+03 Sep 2026 19:42
+UPI ID mcdonalds@example
+UPI Transaction ID 624677951907

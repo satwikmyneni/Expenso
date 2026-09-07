@@ -1,4 +1,7 @@
 import { test, expect } from "@playwright/test";
+import { fileURLToPath } from "node:url";
+
+const statementFixture = fileURLToPath(new URL("../fixtures/imports/indian-bank-statement.txt", import.meta.url));
 
 test.beforeEach(async ({ page }) => { await page.goto("/demo"); await page.waitForFunction(() => document.documentElement.dataset.hydrated === "true"); });
 
@@ -10,9 +13,46 @@ test("protected routes reject an unauthenticated non-demo request",async({page,c
 
 test("invalid callbacks return safely to sign in",async({page})=>{await page.goto("/auth/callback?next=//attacker.example");await expect(page).toHaveURL(/\/login\?error=auth_callback/);await expect(page.getByRole("heading",{name:"Welcome back"})).toBeVisible()});
 
-test("user can add and edit a historical transaction",async({page})=>{await page.goto("/transactions");await page.waitForFunction(() => document.documentElement.dataset.hydrated === "true");await page.getByRole("button",{name:"Add transaction"}).first().click();await page.getByLabel("Amount").fill("425.50");await page.getByLabel("Merchant / description").fill("E2E Cafe");await page.getByLabel("Date").fill("2025-03-14");await page.getByRole("button",{name:"Save transaction"}).click();await expect(page.getByText("E2E Cafe")).toBeVisible();await page.getByRole("button",{name:"Edit E2E Cafe"}).click();await page.getByLabel("Merchant / description").fill("E2E Cafe edited");await page.getByRole("button",{name:"Save changes"}).click();await expect(page.getByText("E2E Cafe edited")).toBeVisible()});
+test("user can add and edit a historical transaction",async({page})=>{await page.goto("/transactions");await page.waitForFunction(() => document.documentElement.dataset.hydrated === "true");await page.locator("main").getByRole("button",{name:"Add transaction"}).click();await page.getByLabel("Amount").fill("425.50");await page.getByLabel("Merchant / description").fill("E2E Cafe");await page.getByLabel("Date").fill("2025-03-14");await page.getByRole("button",{name:"Save transaction"}).click();await expect(page.getByText("E2E Cafe")).toBeVisible();await page.getByRole("button",{name:"Edit E2E Cafe"}).click();await page.getByLabel("Merchant / description").fill("E2E Cafe edited");await page.getByRole("button",{name:"Save changes"}).click();await expect(page.getByText("E2E Cafe edited")).toBeVisible()});
 
-test("mobile navigation exposes the central quick add",async({page},testInfo)=>{test.skip(testInfo.project.name!=="mobile");await page.goto("/dashboard");await page.waitForFunction(() => document.documentElement.dataset.hydrated === "true");const quickAdd=page.getByRole("button",{name:"Add transaction"});await expect(quickAdd).toBeVisible();await quickAdd.click();await expect(page.getByRole("dialog")).toBeVisible()});
+test("mobile navigation exposes every review-first entry choice",async({page},testInfo)=>{test.skip(testInfo.project.name!=="mobile");await page.goto("/dashboard");await page.waitForFunction(() => document.documentElement.dataset.hydrated === "true");const quickAdd=page.getByRole("button",{name:"Add transaction"});await expect(quickAdd).toBeVisible();await quickAdd.click();const dialog=page.getByRole("dialog");await expect(dialog).toBeVisible();await expect(dialog.getByRole("button",{name:"Manual"})).toBeVisible();await expect(dialog.getByRole("button",{name:"Voice"})).toBeVisible();await expect(dialog.getByRole("link",{name:"Scan receipt"})).toBeVisible();await expect(dialog.getByRole("link",{name:"Import statement"})).toBeVisible()});
+
+test("sanitized statement is normalized, reviewed, and explicitly imported",async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=="desktop");
+  await page.goto("/imports");
+  await page.waitForFunction(() => document.documentElement.dataset.hydrated === "true");
+  await page.locator('input[type="file"][accept*=".txt"]').setInputFiles(statementFixture);
+  await expect(page.getByText(/13 rows/).first()).toBeVisible({timeout:20_000});
+
+  const mcdonalds = page.locator("tbody tr").filter({has:page.getByLabel("Merchant row 5")});
+  await expect(mcdonalds).toContainText("Exact merchant match");
+  await expect(mcdonalds).toContainText("Ready");
+
+  const unknown = page.locator("tbody tr").filter({has:page.getByLabel("Merchant row 3")});
+  await expect(unknown).toContainText("No reliable deterministic rule");
+  await expect(unknown).toContainText("Needs review");
+  await expect(unknown.getByRole("checkbox",{name:/Import row/})).not.toBeChecked();
+
+  const transfer = page.locator("tbody tr").filter({hasText:"ATM CASH WITHDRAWAL"});
+  await expect(transfer.getByRole("combobox").filter({has:page.locator('option[value=""]')})).toBeVisible();
+
+  await page.getByRole("button",{name:/^Import \d+$/}).click();
+  await expect(page.getByText(/confirmed transactions imported/)).toBeVisible({timeout:20_000});
+  await expect(page.getByText("indian-bank-statement.txt",{exact:true})).toBeVisible();
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("expenso-demo-data-v2") ?? "{}"));
+  expect(saved.imports).toHaveLength(1);
+  expect(saved.transactions.some((transaction:{date:string;description?:string}) => transaction.date === "2026-08-15" && transaction.description?.includes("HISTORICAL RESTAURANT PURCHASE"))).toBe(true);
+});
+
+test("receipt workspace exposes camera, picker, and secure local review",async({page})=>{
+  await page.goto("/imports?mode=receipt");
+  await page.waitForFunction(() => document.documentElement.dataset.hydrated === "true");
+  await expect(page.getByRole("heading",{name:"Scan a receipt"})).toBeVisible();
+  await expect(page.getByRole("button",{name:"Take photo"})).toBeVisible();
+  await expect(page.getByRole("button",{name:"Choose photo"})).toBeVisible();
+  await expect(page.getByRole("button",{name:/Choose file Image or PDF/i})).toBeVisible();
+  await expect(page.getByText(/OCR runs locally in your browser/)).toBeVisible();
+});
 
 test("user can add a custom category",async({page})=>{await page.goto("/categories");await page.waitForFunction(() => document.documentElement.dataset.hydrated === "true");await page.getByRole("button",{name:"Add category"}).click();await page.getByLabel("Category name").fill("Pet care");await page.getByRole("button",{name:"Add category",exact:true}).last().click();await expect(page.getByText("Pet care",{exact:true})).toBeVisible()});
 

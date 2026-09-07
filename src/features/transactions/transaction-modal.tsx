@@ -11,7 +11,8 @@ import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/field";
 import { Modal } from "@/components/ui/modal";
 import { useFinance } from "@/features/finance/finance-provider";
-import { categorizeMerchant, detectDuplicates } from "@/features/finance/detection";
+import { detectDuplicates } from "@/features/finance/detection";
+import { categorizeDeterministically } from "@/features/imports/categorization";
 import type { TransactionDraft, TransactionType } from "@/features/finance/types";
 import { parseVoiceTransaction, startVoiceCapture } from "./voice";
 import type { FinanceTransaction } from "@/features/finance/types";
@@ -50,7 +51,7 @@ const types: Array<{ value: TransactionType; label: string; icon: typeof ArrowUp
   { value: "refund", label: "Refund", icon: RotateCcw },
 ];
 
-export function TransactionModal({ open, onClose, transaction }: { open: boolean; onClose: () => void; transaction?: FinanceTransaction }) {
+export function TransactionModal({ open, onClose, transaction, voicePrompt = false }: { open: boolean; onClose: () => void; transaction?: FinanceTransaction; voicePrompt?: boolean }) {
   const { data, addTransaction, updateTransaction } = useFinance();
   const [duplicateWarning, setDuplicateWarning] = useState<string>();
   const [listening, setListening] = useState(false);
@@ -59,14 +60,16 @@ export function TransactionModal({ open, onClose, transaction }: { open: boolean
   // eslint-disable-next-line react-hooks/incompatible-library
   const type = watch("type");
   const merchant = watch("merchant");
+  const accountId = watch("accountId");
   const refundOfId = watch("refundOfId");
   const transferAccountId = watch("transferAccountId");
   const loanDestination = type === "transfer" ? data.accounts.find((account) => account.id === transferAccountId && account.type === "loan") : undefined;
 
   useEffect(() => {
-    const suggested = categorizeMerchant(merchant ?? "");
-    if (suggested && data.categories.some((category) => category.id === suggested)) setValue("categoryId", suggested);
-  }, [data.categories, merchant, setValue]);
+    if (!merchant?.trim()) return;
+    const suggested = categorizeDeterministically({ merchant, type, accountId, categories: data.categories, personalRules: data.merchantRules, history: data.transactions });
+    if (suggested.categoryId) setValue("categoryId", suggested.categoryId);
+  }, [accountId, data.categories, data.merchantRules, data.transactions, merchant, setValue, type]);
   useEffect(() => {
     if (type !== "refund" || !refundOfId) return;
     const purchase = data.transactions.find((item) => item.id === refundOfId && item.type === "expense");
@@ -111,6 +114,7 @@ export function TransactionModal({ open, onClose, transaction }: { open: boolean
 
   return <Modal open={open} onClose={onClose} title={transaction ? "Edit transaction" : "Add transaction"} description={transaction ? "Historical balances and reports update automatically." : "Fast to enter, easy to review."}>
     <form onSubmit={handleSubmit(submit)} className="space-y-5 p-5 sm:p-6">
+      {voicePrompt && !transaction && <div className="rounded-2xl border border-info/25 bg-info/10 p-4 text-sm"><p className="font-semibold">Voice entry is ready.</p><p className="mt-1 text-xs text-muted-foreground">Use the “Use voice” button below, then review the parsed fields before saving.</p></div>}
       <div className="grid grid-cols-2 gap-2 rounded-2xl bg-canvas p-1.5 sm:grid-cols-4">
         {types.map((item) => <button type="button" key={item.value} onClick={() => setValue("type", item.value)} className={`flex min-h-11 items-center justify-center gap-2 rounded-xl text-xs font-bold transition ${type === item.value ? "bg-surface text-brand shadow-sm" : "text-muted"}`}><item.icon className="size-4" />{item.label}</button>)}
       </div>

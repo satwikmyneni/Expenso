@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Archive, ArrowUpRight, Plus } from "lucide-react";
+import { Archive, ArrowUpRight, Plus, Store, Trash2 } from "lucide-react";
 import { endOfMonth, startOfMonth } from "date-fns";
 import { toast } from "sonner";
 import { PageHeading } from "@/components/page-heading";
@@ -17,7 +17,7 @@ import type { Category } from "@/features/finance/types";
 import { financeColors } from "@/lib/theme";
 
 export default function CategoriesPage() {
-  const { data, addCategory, archiveCategory } = useFinance();
+  const { data, addCategory, archiveCategory, updateMerchantRule, deleteMerchantRule } = useFinance();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<{ name: string; kind: Category["kind"]; color: string }>({ name: "", kind: "expense", color: financeColors.accent });
@@ -44,10 +44,10 @@ export default function CategoriesPage() {
 
   const archive = async (category: Category) => {
     if (category.isDefault) return;
-    if (!window.confirm(`Archive ${category.name}? Existing transactions will keep this category.`)) return;
+    if (!window.confirm(`Archive ${category.name}? Existing transactions will move to Uncategorized; no financial history will be deleted.`)) return;
     try {
       await archiveCategory(category.id);
-      toast.success("Category archived.");
+      toast.success("Category archived; existing transactions moved to Uncategorized.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not archive category.");
     }
@@ -73,6 +73,12 @@ export default function CategoriesPage() {
         {!category.isDefault ? <Button size="icon" variant="ghost" aria-label={`Archive ${category.name}`} onClick={() => void archive(category)}><Archive className="size-4" /></Button> : <ArrowUpRight className="size-4 text-muted-foreground" aria-hidden="true" />}
       </CardContent></Card>; })}
     </div>
+    <Card className="mt-5 overflow-hidden">
+      <CardHeader><div><p className="eyebrow mb-2">Deterministic learning</p><CardTitle>Merchant rules</CardTitle><p className="mt-2 text-sm text-muted-foreground">Private exact-match corrections used before built-in and keyword rules. Removing one never removes a transaction.</p></div><Store className="size-5 text-brand" /></CardHeader>
+      <CardContent className="px-5 pb-5 pt-0 sm:px-6 sm:pb-6">
+        {data.merchantRules.length ? <div className="divide-y divide-border">{data.merchantRules.map((rule) => <div key={rule.id} className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center"><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{rule.pattern}</p><p className="mt-1 text-xs text-muted-foreground">Exact personal rule · {rule.enabled ? "Active" : "Disabled because its category was archived"}</p></div><Select className="sm:w-56" aria-label={`Category for ${rule.pattern}`} value={rule.categoryId ?? ""} onChange={(event) => void updateMerchantRule(rule.id, event.target.value).then(() => toast.success("Merchant rule updated.")).catch((error) => toast.error(error instanceof Error ? error.message : "Could not update rule."))}><option value="">Choose category</option>{active.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</Select><Button size="icon" variant="ghost" aria-label={`Delete merchant rule for ${rule.pattern}`} onClick={() => { if (window.confirm(`Delete the rule for ${rule.pattern}? Existing transactions will not change.`)) void deleteMerchantRule(rule.id).then(() => toast.success("Merchant rule deleted.")).catch((error) => toast.error(error instanceof Error ? error.message : "Could not delete rule.")); }}><Trash2 className="size-4" /></Button></div>)}</div> : <p className="py-8 text-center text-sm text-muted-foreground">No personal rules yet. Correct a category during import and choose “Always categorize” to create one.</p>}
+      </CardContent>
+    </Card>
     <Modal open={open} onClose={() => setOpen(false)} title="Add a category" description="Custom categories are private to your account.">
       <form onSubmit={submit} className="grid gap-4 p-5 sm:p-6">
         <Field label="Category name"><Input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="e.g. Pet care" /></Field>

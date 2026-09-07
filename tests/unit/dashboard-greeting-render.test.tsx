@@ -24,6 +24,8 @@ const data: FinanceData = {
   recurring: [],
   notifications: [],
   notificationPreferences: { pushEnabled: false },
+  merchantRules: [],
+  imports: [],
 };
 
 describe("dashboard greeting rendering", () => {

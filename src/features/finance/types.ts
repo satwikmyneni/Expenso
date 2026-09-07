@@ -82,8 +82,69 @@ export interface FinanceTransaction {
   duplicateOfId?: string;
   loanPrincipalMinor?: bigint;
   loanInterestMinor?: bigint;
+  importId?: string;
+  reviewStatus?: "confirmed" | "needs_review" | "ignored" | "duplicate";
+  metadata?: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface MerchantRule {
+  id: string;
+  pattern: string;
+  merchantNormalized: string;
+  matchType: "exact" | "contains" | "regex";
+  categoryId?: string;
+  accountId?: string;
+  transactionType?: TransactionType;
+  priority: number;
+  enabled: boolean;
+  applicationCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MerchantRuleDraft {
+  pattern: string;
+  merchantNormalized: string;
+  categoryId: string;
+  accountId?: string;
+  transactionType?: TransactionType;
+}
+
+export interface ImportHistoryItem {
+  id: string;
+  accountId?: string;
+  fileName: string;
+  fileType: string;
+  fileHash?: string;
+  sourceKind: "statement" | "receipt_ocr";
+  status: "uploaded" | "parsing" | "review" | "imported" | "failed" | "cancelled";
+  totalRows: number;
+  importedRows: number;
+  skippedRows: number;
+  duplicateRows: number;
+  failedRows: number;
+  errorMessage?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ImportHistoryDraft {
+  accountId: string;
+  fileName: string;
+  fileType: string;
+  fileHash: string;
+  sourceKind?: ImportHistoryItem["sourceKind"];
+  totalRows: number;
+}
+
+export interface ImportCompletion {
+  importedRows: number;
+  skippedRows: number;
+  duplicateRows: number;
+  failedRows: number;
+  errorMessage?: string;
 }
 
 export interface Budget {
@@ -166,6 +227,8 @@ export interface FinanceData {
   recurring: RecurringItem[];
   notifications: FinanceNotification[];
   notificationPreferences: NotificationPreferences;
+  merchantRules: MerchantRule[];
+  imports: ImportHistoryItem[];
   demo: boolean;
 }
 
@@ -184,6 +247,12 @@ export interface TransactionDraft {
   loanInterest?: string;
   tags?: string[];
   source?: TransactionSource;
+  description?: string;
+  reference?: string;
+  importId?: string;
+  duplicateOfId?: string;
+  reviewStatus?: FinanceTransaction["reviewStatus"];
+  metadata?: Record<string, unknown>;
 }
 
 export interface CategoryDraft {

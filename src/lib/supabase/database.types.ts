@@ -598,7 +598,9 @@ export type Database = {
         Row: {
           account_id: string | null
           created_at: string
+          duplicate_rows: number
           error_message: string | null
+          failed_rows: number
           file_hash: string | null
           file_name: string
           file_path: string | null
@@ -606,6 +608,7 @@ export type Database = {
           id: string
           imported_rows: number
           skipped_rows: number
+          source_kind: string
           status: Database["public"]["Enums"]["import_status"]
           total_rows: number
           updated_at: string
@@ -614,7 +617,9 @@ export type Database = {
         Insert: {
           account_id?: string | null
           created_at?: string
+          duplicate_rows?: number
           error_message?: string | null
+          failed_rows?: number
           file_hash?: string | null
           file_name: string
           file_path?: string | null
@@ -622,6 +627,7 @@ export type Database = {
           id?: string
           imported_rows?: number
           skipped_rows?: number
+          source_kind?: string
           status?: Database["public"]["Enums"]["import_status"]
           total_rows?: number
           updated_at?: string
@@ -630,7 +636,9 @@ export type Database = {
         Update: {
           account_id?: string | null
           created_at?: string
+          duplicate_rows?: number
           error_message?: string | null
+          failed_rows?: number
           file_hash?: string | null
           file_name?: string
           file_path?: string | null
@@ -638,6 +646,7 @@ export type Database = {
           id?: string
           imported_rows?: number
           skipped_rows?: number
+          source_kind?: string
           status?: Database["public"]["Enums"]["import_status"]
           total_rows?: number
           updated_at?: string
@@ -669,6 +678,7 @@ export type Database = {
           enabled: boolean
           id: string
           match_type: string
+          merchant_normalized: string
           pattern: string
           priority: number
           transaction_type:
@@ -685,6 +695,7 @@ export type Database = {
           enabled?: boolean
           id?: string
           match_type?: string
+          merchant_normalized: string
           pattern: string
           priority?: number
           transaction_type?:
@@ -701,6 +712,7 @@ export type Database = {
           enabled?: boolean
           id?: string
           match_type?: string
+          merchant_normalized?: string
           pattern?: string
           priority?: number
           transaction_type?:
@@ -1274,6 +1286,10 @@ export type Database = {
       }
     }
     Functions: {
+      archive_category_safely: {
+        Args: { target_category_id: string }
+        Returns: undefined
+      }
       monthly_financial_summary: {
         Args: { month_start?: string }
         Returns: {

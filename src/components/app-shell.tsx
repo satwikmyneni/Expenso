@@ -28,6 +28,7 @@ import type { LucideIcon } from "lucide-react";
 import { cn, initials } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { TransactionModal } from "@/features/transactions/transaction-modal";
+import { TransactionEntryMenu } from "@/features/transactions/transaction-entry-menu";
 import { useFinance } from "@/features/finance/finance-provider";
 import { isSupabaseConfigAbsent } from "@/lib/supabase/config";
 
@@ -80,7 +81,9 @@ function NavItem({ item }: { item: NavigationItem }) {
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { data, loading, syncStatus, connectionState, connectionError, reload } = useFinance();
+  const [entryOpen, setEntryOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+  const [voicePrompt, setVoicePrompt] = useState(false);
   const status = { offline: [CloudOff, "Offline"], syncing: [Cloud, "Syncing"], synced: [Cloud, "Synced"], failed: [CloudOff, "Sync failed"] } as const;
   const [StatusIcon, statusLabel] = status[syncStatus];
   const unreadNotifications = data.notifications?.filter((item) => !item.readAt).length ?? 0;
@@ -131,7 +134,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           {data.demo && <Link href="/login" className="rounded-full border border-income/15 bg-income/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-income"><span className="sm:hidden">Sample</span><span className="hidden sm:inline">Sample workspace · Use my data</span></Link>}
           <Link href="/calendar" className="relative hidden size-11 place-items-center rounded-full border border-border bg-surface text-muted-foreground transition hover:border-ring/40 hover:text-foreground sm:grid" aria-label={`Open upcoming reminders${unreadNotifications ? `, ${unreadNotifications} unread` : ""}`}><Bell className="size-[18px]" />{unreadNotifications > 0 && <span className="absolute right-1.5 top-1.5 size-2 rounded-full bg-expense" aria-hidden="true" />}</Link>
           <Link href="/settings" className="hidden size-11 place-items-center rounded-full border border-border bg-elevated text-xs font-bold sm:grid" aria-label={`Open settings for ${data.profile.displayName}`}><span>{initials(data.profile.displayName)}</span><StatusIcon className="sr-only" /></Link>
-          <Button className="hidden rounded-full px-5 sm:inline-flex" onClick={() => setAddOpen(true)}><Plus className="size-4" /> Add transaction</Button>
+          <Button className="hidden rounded-full px-5 sm:inline-flex" onClick={() => setEntryOpen(true)}><Plus className="size-4" /> Add transaction</Button>
         </div>
       </header>
       {connectionState === "cached" && <div className="border-b border-warning/25 bg-warning/10 px-4 py-2.5 text-center text-xs font-semibold text-warning" role="status">{connectionError}</div>}
@@ -141,11 +144,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <nav className="fixed inset-x-0 bottom-0 z-40 grid h-[76px] grid-cols-5 border-t border-border bg-primary/95 px-2 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl lg:hidden" aria-label="Mobile navigation">
       {mobile.map((item) => {
         const active = pathname === item.href || (item.href !== "/dashboard" && pathname.startsWith(item.href));
-        if (item.href === "#add") return <button key={item.href} onClick={() => setAddOpen(true)} className="relative flex min-h-11 flex-col items-center justify-end gap-1 pb-2 text-[10px] font-bold text-info" aria-label="Add transaction"><span className="absolute -top-5 grid size-14 place-items-center rounded-full border-[5px] border-background bg-brand text-white shadow-float"><Plus className="size-6" /></span><span>Add</span></button>;
+        if (item.href === "#add") return <button key={item.href} onClick={() => setEntryOpen(true)} className="relative flex min-h-11 flex-col items-center justify-end gap-1 pb-2 text-[10px] font-bold text-info" aria-label="Add transaction"><span className="absolute -top-5 grid size-14 place-items-center rounded-full border-[5px] border-background bg-brand text-white shadow-float"><Plus className="size-6" /></span><span>Add</span></button>;
         return <Link key={item.href} href={item.href} className={cn("flex min-h-11 flex-col items-center justify-end gap-1 pb-2 text-[10px] font-bold transition", active ? "text-info" : "text-muted-foreground")}><item.icon className="size-5" aria-hidden="true" /><span>{item.label}</span></Link>;
       })}
     </nav>
 
-    <TransactionModal open={addOpen} onClose={() => setAddOpen(false)} />
+    <TransactionEntryMenu open={entryOpen} onClose={() => setEntryOpen(false)} onManual={() => { setEntryOpen(false); setVoicePrompt(false); setAddOpen(true); }} onVoice={() => { setEntryOpen(false); setVoicePrompt(true); setAddOpen(true); }} />
+    <TransactionModal open={addOpen} onClose={() => setAddOpen(false)} voicePrompt={voicePrompt} />
   </div>;
 }
