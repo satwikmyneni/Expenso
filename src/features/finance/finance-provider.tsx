@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { demoData } from "./demo-data";
 import type { Account, AccountDraft, Budget, Category, CategoryDraft, FinanceData, FinanceTransaction, Goal, GoalContribution, GoalContributionDraft, ImportCompletion, ImportHistoryDraft, ImportHistoryItem, MerchantRule, MerchantRuleDraft, ProfileDraft, RecurringDraft, TransactionDraft } from "./types";
 import { parseMoney } from "./money";
+import { accountBalance } from "./calculations";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { supabaseConfigState } from "@/lib/supabase/config";
 import { FinanceRepository } from "./repository";
@@ -13,6 +14,9 @@ import { isDemoMode } from "./demo-mode";
 import { buildLiabilityReminderCandidates } from "./liability-reminders";
 import { loadedAccountDeleteBlocker } from "@/features/accounts/account-deletion";
 import { sha256File, validateReceiptFile } from "@/features/imports/file-security";
+import type { RecurringItem } from "./types";
+import { querySampleTransactions, type TransactionPage, type TransactionQuery } from "@/features/transactions/query";
+import { sampleReport, type PeriodReport } from "@/features/insights/reports";
 
 type ConnectionState = "loading" | "demo" | "live" | "cached" | "unavailable";
 
@@ -32,23 +36,33 @@ interface FinanceContextValue {
   deleteAccount: (id: string) => Promise<void>;
   archiveAccount: (id: string) => Promise<void>;
   loadAccountTransactions: (accountId: string) => Promise<FinanceTransaction[]>;
+  queryTransactions: (query: TransactionQuery) => Promise<TransactionPage>;
+  exportTransactions: (query?: TransactionQuery) => Promise<FinanceTransaction[]>;
+  periodReport: (start: string, end: string, account?: string) => Promise<PeriodReport>;
+  receiptLinks: (transactionId: string) => Promise<Array<{id: string; name: string; url: string}>>;
   addCategory: (category: CategoryDraft) => Promise<void>;
+  updateCategory: (id: string, category: CategoryDraft) => Promise<void>;
   archiveCategory: (id: string) => Promise<void>;
   loadImportCandidates: (accountId: string, startDate: string, endDate: string) => Promise<FinanceTransaction[]>;
   findImportByHash: (fileHash: string) => Promise<ImportHistoryItem | undefined>;
   createImport: (draft: ImportHistoryDraft) => Promise<ImportHistoryItem>;
   completeImport: (id: string, completion: ImportCompletion) => Promise<ImportHistoryItem>;
   saveMerchantRule: (draft: MerchantRuleDraft) => Promise<MerchantRule>;
-  updateMerchantRule: (id: string, categoryId: string) => Promise<MerchantRule>;
+  updateMerchantRule: (id: string, categoryId: string, draft?: MerchantRuleDraft) => Promise<MerchantRule>;
   deleteMerchantRule: (id: string) => Promise<void>;
   uploadReceipt: (transactionId: string, file: File, ocrResult: Record<string, unknown>) => Promise<string | undefined>;
   addBudget: (budget: Omit<Budget, "id">) => Promise<void>;
+  updateBudget: (id: string, budget: Omit<Budget,"id">) => Promise<void>;
+  archiveBudget: (id: string) => Promise<void>;
   addGoal: (goal: Omit<Goal, "id">) => Promise<void>;
+  updateGoal: (id: string, goal: Omit<Goal,"id">) => Promise<void>;
+  archiveGoal: (id: string) => Promise<void>;
   addGoalContribution: (draft: GoalContributionDraft) => Promise<void>;
   updateGoalContribution: (id: string, draft: GoalContributionDraft) => Promise<void>;
   deleteGoalContribution: (id: string) => Promise<void>;
   setPushNotifications: (enabled: boolean) => Promise<void>;
   addRecurringItem: (item: RecurringDraft) => Promise<void>;
+  updateRecurringItem: (item: RecurringItem) => Promise<void>;
   updateProfile: (profile: ProfileDraft) => Promise<void>;
   resetDemo: () => void;
 }
@@ -101,6 +115,7 @@ const localTransaction = (draft: TransactionDraft, data: FinanceData): FinanceTr
     amountMinor: parseMoney(draft.amount),
     currency: data.profile.currency,
     date: draft.date,
+    occurredAt: draft.occurredAt ?? new Date(`${draft.date}T12:00:00`).toISOString(),
     merchant: draft.merchant,
     description: draft.description,
     notes: draft.notes,
@@ -349,6 +364,13 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "budgets", filter: userFilter }, refresh)
       .on("postgres_changes", { event: "*", schema: "public", table: "goals", filter: userFilter }, refresh)
       .on("postgres_changes", { event: "*", schema: "public", table: "goal_contributions", filter: userFilter }, refresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "categories", filter: userFilter }, refresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "merchant_rules", filter: userFilter }, refresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "budget_categories", filter: userFilter }, refresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "bills", filter: userFilter }, refresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "subscriptions", filter: userFilter }, refresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "recurring_transactions", filter: userFilter }, refresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "imports", filter: userFilter }, refresh)
       .subscribe((status) => {
         if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
           setSyncStatus("failed");
@@ -363,7 +385,7 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
       setSyncStatus("syncing");
       try {
         const created = await repository.createTransaction(data.profile.id, draft, data.profile.currency);
-        setData((current) => ({ ...current, accounts: withoutSyncedBalances(current.accounts), transactions: [created, ...current.transactions] }));
+        setData((current) => ({ ...current, accounts: current.demo ? withoutSyncedBalances(current.accounts) : current.accounts, transactions: [created, ...current.transactions] }));
         await load();
         setSyncStatus("synced");
         return created;
@@ -375,7 +397,9 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
 
     const now = new Date().toISOString();
     const created = localTransaction(draft, data);
-    setData((current) => ({ ...current, accounts: withoutSyncedBalances(current.accounts), transactions: [created, ...current.transactions] }));
+    // Offline inserts apply only the new transaction's delta to the synced
+    // balance; the recent-page cache is not a complete account ledger.
+    setData((current) => ({ ...current, accounts: current.demo ? withoutSyncedBalances(current.accounts) : current.accounts.map((account) => ({ ...account, currentBalanceMinor: accountBalance({ ...account, openingBalanceMinor: accountBalance(account,current.transactions), currentBalanceMinor: undefined },[created]) })), transactions: [created, ...current.transactions] }));
     if (repository && !navigator.onLine) {
       await enqueue({ id: crypto.randomUUID(), userId: data.profile.id, entity: "transaction", operation: "insert", payload: { ...draft }, createdAt: now });
       setSyncStatus("offline");
@@ -391,7 +415,7 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
       setSyncStatus("syncing");
       try {
         const created = await repository.createTransactions(data.profile.id, drafts, data.profile.currency, onProgress);
-        setData((current) => ({ ...current, accounts: withoutSyncedBalances(current.accounts), transactions: [...created, ...current.transactions] }));
+        setData((current) => ({ ...current, accounts: current.demo ? withoutSyncedBalances(current.accounts) : current.accounts, transactions: [...created, ...current.transactions] }));
         await load();
         setSyncStatus("synced");
         return created;
@@ -404,14 +428,14 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
       }
     }
     const created = drafts.map((draft) => localTransaction(draft, data));
-    setData((current) => ({ ...current, accounts: withoutSyncedBalances(current.accounts), transactions: [...created, ...current.transactions] }));
+    setData((current) => ({ ...current, accounts: current.demo ? withoutSyncedBalances(current.accounts) : current.accounts, transactions: [...created, ...current.transactions] }));
     onProgress?.(created.length, created.length);
     return created;
   }, [data, load, repository]);
 
   const deleteTransaction = useCallback(async (id: string) => {
     if (repository && !data.demo) await repository.deleteTransaction(id);
-    setData((current) => ({ ...current, accounts: withoutSyncedBalances(current.accounts), transactions: current.transactions.filter((transaction) => transaction.id !== id) }));
+    setData((current) => ({ ...current, accounts: current.demo ? withoutSyncedBalances(current.accounts) : current.accounts, transactions: current.transactions.filter((transaction) => transaction.id !== id) }));
     if (repository && !data.demo) await load();
   }, [data.demo, load, repository]);
 
@@ -423,7 +447,7 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
           if (!current) throw new Error("Transaction not found.");
           return { ...current, ...draft, amountMinor: parseMoney(draft.amount), loanPrincipalMinor: draft.loanPrincipal ? parseMoney(draft.loanPrincipal) : undefined, loanInterestMinor: draft.loanInterest ? parseMoney(draft.loanInterest) : undefined, source: draft.source ?? current.source, updatedAt: new Date().toISOString() } as FinanceTransaction;
         })();
-    setData((current) => ({ ...current, accounts: withoutSyncedBalances(current.accounts), transactions: current.transactions.map((item) => item.id === id ? updated : item) }));
+    setData((current) => ({ ...current, accounts: current.demo ? withoutSyncedBalances(current.accounts) : current.accounts, transactions: current.transactions.map((item) => item.id === id ? updated : item) }));
     if (repository && !data.demo) await load();
     return updated;
   }, [data.demo, data.transactions, load, repository]);
@@ -470,6 +494,53 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     const created: Category = repository && !data.demo ? await repository.createCategory(data.profile.id, category) : { ...category, id: crypto.randomUUID(), archived: false };
     setData((current) => ({ ...current, categories: [...current.categories, created] }));
   }, [data.demo, data.profile.id, repository]);
+
+  const queryTransactions = useCallback(async (query: TransactionQuery) => {
+    if (data.demo) return querySampleTransactions(data.transactions.map((row) => ({ ...row, importedAt: data.imports.find((item) => item.id === row.importId)?.createdAt })), query);
+    if (!repository || !data.profile.id) throw new Error("An authenticated connection is required.");
+    if (!navigator.onLine) return { ...querySampleTransactions(data.transactions,query), cached: true };
+    return repository.queryTransactions(query);
+  }, [data.demo, data.imports, data.profile.id, data.transactions, repository]);
+
+  const exportTransactions = useCallback(async (query: TransactionQuery = {}) => {
+    if (!data.demo && repository) return repository.exportTransactions(query);
+    if (!data.demo) throw new Error("An authenticated connection is required.");
+    const rows: FinanceTransaction[] = [];
+    for (let page = 0; ; page++) {
+      const result = querySampleTransactions(data.transactions, { ...query, page, pageSize: 100 });
+      rows.push(...result.rows);
+      if (rows.length >= result.total) return rows;
+    }
+  }, [data.demo, data.transactions, repository]);
+
+  const periodReport = useCallback(async (start: string, end: string, account?: string) => {
+    if (data.demo) return sampleReport(data.transactions, data.budgets, start, end, account);
+    if (!repository || !data.profile.id) throw new Error("An authenticated connection is required.");
+    return repository.periodReport(start, end, account);
+  }, [data.demo, data.profile.id, data.transactions, data.budgets, repository]);
+
+  const receiptLinks = useCallback(async (transactionId: string) => {
+    if (data.demo) return [];
+    if (!repository || !data.profile.id) throw new Error("An authenticated connection is required.");
+    return repository.receiptLinks(data.profile.id, transactionId);
+  }, [data.demo, data.profile.id, repository]);
+
+  const updateCategory = useCallback(async (id: string, category: CategoryDraft) => {
+    const existing = data.categories.find((row) => row.id === id);
+    if (!existing) throw new Error("Category unavailable.");
+    if (existing.name.toLowerCase() === "uncategorized") throw new Error("Uncategorized is protected.");
+    let parent = category.parentId;
+    const visited = new Set([id]);
+    while (parent) {
+      if (visited.has(parent)) throw new Error("A category cannot become its own ancestor.");
+      visited.add(parent);
+      const next = data.categories.find((row) => row.id === parent && !row.archived);
+      if (!next) throw new Error("Choose an available parent category.");
+      parent = next.parentId;
+    }
+    const updated = repository && !data.demo ? await repository.updateCategory(data.profile.id, id, category) : { ...existing, ...category };
+    setData((current) => ({ ...current, categories: current.categories.map((row) => row.id === id ? updated : row) }));
+  }, [data.categories, data.demo, data.profile.id, repository]);
 
   const archiveCategory = useCallback(async (id: string) => {
     if (repository && !data.demo) await repository.archiveCategory(id);
@@ -532,13 +603,13 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     return saved;
   }, [data.demo, data.merchantRules, data.profile.id, repository]);
 
-  const updateMerchantRule = useCallback(async (id: string, categoryId: string) => {
+  const updateMerchantRule = useCallback(async (id: string, categoryId: string, draft?: MerchantRuleDraft) => {
     const updated = repository && !data.demo
-      ? await repository.updateMerchantRule(data.profile.id, id, categoryId)
+      ? await repository.updateMerchantRule(data.profile.id, id, categoryId, draft)
       : (() => {
           const previous = data.merchantRules.find((rule) => rule.id === id);
           if (!previous) throw new Error("Merchant rule was not found.");
-          return { ...previous, categoryId, enabled: true, updatedAt: new Date().toISOString() };
+          return { ...previous, ...draft, categoryId, enabled: true, updatedAt: new Date().toISOString() };
         })();
     setData((current) => ({ ...current, merchantRules: current.merchantRules.map((rule) => rule.id === id ? updated : rule) }));
     return updated;
@@ -626,7 +697,35 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     setData(demoData);
   }, []);
 
-  return <FinanceContext.Provider value={{ data, loading, syncStatus, connectionState, connectionError, reload: load, addTransaction, addTransactions, updateTransaction, deleteTransaction, addAccount, updateAccount, deleteAccount, archiveAccount, loadAccountTransactions, addCategory, archiveCategory, loadImportCandidates, findImportByHash, createImport, completeImport, saveMerchantRule, updateMerchantRule, deleteMerchantRule, uploadReceipt, addBudget, addGoal, addGoalContribution, updateGoalContribution, deleteGoalContribution, setPushNotifications, addRecurringItem, updateProfile, resetDemo }}>{children}</FinanceContext.Provider>;
+  const updateGoal = useCallback(async (id: string, goal: Omit<Goal,"id">) => {
+    if (!goal.name.trim() || goal.targetMinor <= 0n) throw new Error("Enter a name and positive target.");
+    const previous = data.goals.find((row) => row.id === id);
+    if (!previous) throw new Error("Goal unavailable.");
+    const updated = repository && !data.demo ? await repository.updateGoal(data.profile.id, id, goal) : { ...previous, ...goal, currentMinor: previous.currentMinor, openingMinor: previous.openingMinor };
+    setData((current) => ({ ...current, goals: current.goals.map((row) => row.id === id ? updated : row) }));
+  }, [data.demo, data.profile.id, data.goals, repository]);
+
+  const archiveGoal = useCallback(async (id: string) => {
+    if (repository && !data.demo) await repository.archiveGoal(data.profile.id, id);
+    setData((current) => ({ ...current, goals: current.goals.filter((row) => row.id !== id) }));
+  }, [data.demo, data.profile.id, repository]);
+
+  const updateBudget = useCallback(async (id: string, budget: Omit<Budget,"id">) => {
+    const updated = repository && !data.demo ? await repository.saveBudget(budget,id) : { ...budget,id };
+    setData((current) => ({ ...current, budgets: current.budgets.map((row) => row.id === id ? updated : row) }));
+  }, [data.demo, repository]);
+
+  const archiveBudget = useCallback(async (id: string) => {
+    if (repository && !data.demo) await repository.archiveBudget(data.profile.id,id);
+    setData((current) => ({ ...current, budgets: current.budgets.filter((row) => row.id !== id) }));
+  }, [data.demo, data.profile.id, repository]);
+
+  const updateRecurringItem = useCallback(async (item: RecurringItem) => {
+    if (repository && !data.demo) await repository.updateRecurringItem(data.profile.id,item);
+    setData((current) => ({ ...current, recurring: item.status === "archived" ? current.recurring.filter((row) => row.id !== item.id || row.kind !== item.kind) : current.recurring.map((row) => row.id === item.id && row.kind === item.kind ? item : row) }));
+  }, [data.demo, data.profile.id, repository]);
+
+  return <FinanceContext.Provider value={{ data, loading, syncStatus, connectionState, connectionError, reload: load, addTransaction, addTransactions, updateTransaction, deleteTransaction, addAccount, updateAccount, deleteAccount, archiveAccount, loadAccountTransactions, queryTransactions, exportTransactions, periodReport, receiptLinks, addCategory, updateCategory, archiveCategory, loadImportCandidates, findImportByHash, createImport, completeImport, saveMerchantRule, updateMerchantRule, deleteMerchantRule, uploadReceipt, addBudget, updateBudget, archiveBudget, addGoal, updateGoal, archiveGoal, addGoalContribution, updateGoalContribution, deleteGoalContribution, setPushNotifications, addRecurringItem, updateRecurringItem, updateProfile, resetDemo }}>{children}</FinanceContext.Provider>;
 }
 
 export function useFinance() {

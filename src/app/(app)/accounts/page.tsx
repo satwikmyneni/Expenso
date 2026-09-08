@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Plus, WalletCards } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeading } from "@/components/page-heading";
@@ -14,6 +15,11 @@ import { formatMoney } from "@/features/finance/money";
 import type { AccountDraft } from "@/features/finance/types";
 
 export default function AccountsPage() {
+  return <Suspense fallback={<p role="status">Loading accounts…</p>}><AccountsContent /></Suspense>;
+}
+
+function AccountsContent() {
+  const params = useSearchParams();
   const { data, addAccount } = useFinance();
   const [open, setOpen] = useState(false);
   const worth = netWorth(data.accounts, data.transactions);
@@ -38,7 +44,7 @@ export default function AccountsPage() {
       </CardContent>
     </Card>
     <div className="grid gap-5 md:grid-cols-2 2xl:grid-cols-3">
-      {data.accounts.filter((account) => !account.archived).map((account) => <ManagedAccountCard key={account.id} account={account} balance={accountBalance(account, data.transactions)} />)}
+      {data.accounts.filter((account) => !account.archived).map((account) => <ManagedAccountCard key={`${account.id}-${params.get("manage") === account.id}`} initiallyEditing={params.get("manage") === account.id} account={account} balance={accountBalance(account, data.transactions)} />)}
     </div>
     <AccountFormDialog open={open} onClose={() => setOpen(false)} accounts={data.accounts} currency={data.profile.currency} onSave={create} />
   </>;

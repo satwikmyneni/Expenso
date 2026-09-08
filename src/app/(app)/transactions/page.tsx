@@ -1,98 +1,106 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { Download, Filter, Plus, Search, SlidersHorizontal, X } from "lucide-react";
+import { Suspense, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Download, Filter, Plus, Search, SlidersHorizontal } from "lucide-react";
+import { format, isValid, subDays } from "date-fns";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Input, Select } from "@/components/ui/field";
+import { Field, Input, Select } from "@/components/ui/field";
 import { PageHeading } from "@/components/page-heading";
 import { useFinance } from "@/features/finance/finance-provider";
-import type { FinanceTransaction, TransactionType } from "@/features/finance/types";
+import { useTransactions, usePeriodReport } from "@/features/finance/use-finance-query";
+import type { FinanceTransaction, TransactionType, TransactionSource } from "@/features/finance/types";
 import { TransactionRow } from "@/features/transactions/transaction-row";
 import { TransactionModal } from "@/features/transactions/transaction-modal";
+import { dateRange, datePresets, transactionSorts, type DatePreset, type TransactionQuery, type TransactionSort } from "@/features/transactions/query";
 import { formatMoney } from "@/features/finance/money";
+import { accountBalance } from "@/features/finance/calculations";
 import { exportTransactionsCsv } from "@/features/exports/csv";
 
-export default function TransactionsPage() {
-  return <Suspense fallback={<div className="h-96 animate-pulse rounded-panel bg-muted-surface" aria-label="Loading transactions" />}><TransactionsContent /></Suspense>;
-}
+const presetLabels = ["All dates", "Today", "Yesterday", "This week", "This month", "Last month", "Last 7 days", "Last 30 days", "This year", "Last year", "Custom date range"];
+const sortLabels = ["Newest", "Oldest", "Amount high → low", "Amount low → high", "Recently uploaded/imported", "Oldest uploaded/imported"];
+export default function TransactionsPage() { return <Suspense fallback={<p role="status">Loading transactions…</p>}><TransactionsContent /></Suspense>; }
 
 function TransactionsContent() {
-  const { data, deleteTransaction, loadAccountTransactions } = useFinance();
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const [addOpen, setAddOpen] = useState(false);
-  const [search, setSearch] = useState("");
-  const [type, setType] = useState<TransactionType | "all">("all");
-  const [category, setCategory] = useState("all");
-  const [filtersOpen, setFiltersOpen] = useState(false);
-  const [editing, setEditing] = useState<FinanceTransaction>();
-  const [accountHistory, setAccountHistory] = useState<{ accountId: string; transactions: FinanceTransaction[] } | null>(null);
-  const accountId = searchParams.get("accountId");
-  const selectedAccount = data.accounts.find((item) => item.id === accountId);
-
-  useEffect(() => {
-    let active = true;
-    if (!accountId) return () => { active = false; };
-    void loadAccountTransactions(accountId).then((transactions) => {
-      if (active) setAccountHistory({ accountId, transactions });
-    }).catch(() => {
-      if (!active) return;
-      setAccountHistory({ accountId, transactions: [] });
-      toast.error("We couldn't load that account's transaction history.");
-    });
-    return () => { active = false; };
-  }, [accountId, loadAccountTransactions]);
-
-  const accountTransactions = accountId && accountHistory?.accountId === accountId ? accountHistory.transactions : null;
-  const filtered = useMemo(() => (accountId ? accountTransactions ?? [] : data.transactions).filter((transaction) => {
-    const haystack = [transaction.merchant, transaction.description, transaction.notes, transaction.reference, transaction.tags.join(" "), formatMoney(transaction.amountMinor, transaction.currency), data.accounts.find((item) => item.id === transaction.accountId)?.name, data.categories.find((item) => item.id === transaction.categoryId)?.name].join(" ").toLowerCase();
-    return (!search || haystack.includes(search.toLowerCase())) && (type === "all" || transaction.type === type) && (category === "all" || transaction.categoryId === category);
-  }), [accountId, accountTransactions, category, data.accounts, data.categories, data.transactions, search, type]);
-  const activeFilters = [type, accountId ?? "all", category].filter((value) => value !== "all").length;
-
-  const selectAccount = (id: string) => {
-    const next = new URLSearchParams(searchParams.toString());
-    if (id === "all") next.delete("accountId");
-    else next.set("accountId", id);
-    const query = next.toString();
-    router.replace(query ? `/transactions?${query}` : "/transactions", { scroll: false });
+  const { data, deleteTransaction, exportTransactions } = useFinance();
+  const params = useSearchParams();
+  const [addOpen,setAddOpen] = useState(false);
+  const [editing,setEditing] = useState<FinanceTransaction>();
+  const [filtersOpen,setFiltersOpen] = useState(false);
+  const [exporting,setExporting] = useState(false);
+  const [custom,setCustom] = useState({ from: params.get("dateFrom") ?? "", through: params.get("dateTo") && isValid(new Date(params.get("dateTo") + "T12:00:00")) ? format(subDays(new Date(params.get("dateTo") + "T12:00:00"),1),"yyyy-MM-dd") : "" });
+  const query: TransactionQuery = {
+    account: params.get("account") ?? params.get("accountId") ?? undefined,
+    category: params.get("category") ?? undefined, type: (params.get("type") || undefined) as TransactionType | undefined,
+    source: (params.get("source") || undefined) as TransactionSource | undefined, importId: params.get("importId") ?? undefined,
+    id: params.get("id") ?? undefined, search: params.get("search") ?? undefined,
+    dateFrom: params.get("dateFrom") ?? undefined, dateTo: params.get("dateTo") ?? undefined,
+    minAmount: params.get("minAmount") ?? undefined, maxAmount: params.get("maxAmount") ?? undefined,
+    sort: transactionSorts.includes(params.get("sort") as TransactionSort) ? params.get("sort") as TransactionSort : "newest",
+    page: Math.max(Number(params.get("page")) || 0,0), pageSize: 25,
   };
-
+  const { result,error,refresh } = useTransactions(query);
+  const selectedAccount = data.accounts.find((row) => row.id === query.account);
+  const change = (values: Record<string,string | undefined>) => {
+    // Read the synchronously updated URL, not a previous React render. Native
+    // history is integrated with useSearchParams by Next; rapid changes compose
+    // without racing server navigations or dropping other active filters.
+    const next = new URLSearchParams(window.location.search);
+    const legacyAccount = next.get("accountId");
+    if (legacyAccount && !next.has("account")) next.set("account",legacyAccount);
+    next.delete("accountId"); next.delete("page");
+    Object.entries(values).forEach(([key,value]) => { if (value) next.set(key,value); else next.delete(key); });
+    window.history.replaceState(null,"","/transactions" + (next.size ? "?" + next : ""));
+  };
+  const preset = params.get("datePreset") ?? (query.dateFrom || query.dateTo ? "custom" : "all");
   const remove = async (id: string) => {
-    if (!window.confirm("Delete this transaction? Historical reports and balances will update automatically.")) return;
-    try {
-      await deleteTransaction(id);
-      setAccountHistory((current) => current ? { ...current, transactions: current.transactions.filter((transaction) => transaction.id !== id) } : null);
-      toast.success("Transaction deleted");
-    } catch (error) { toast.error(error instanceof Error ? error.message : "Could not delete transaction"); }
+    if (!window.confirm("Delete this transaction? Balances and historical reports will update.")) return;
+    try { await deleteTransaction(id); refresh(); toast.success("Transaction deleted"); }
+    catch (error) { toast.error(error instanceof Error ? error.message : "Could not delete transaction"); }
   };
-
+  const exact = query.id ? result?.rows[0] : undefined;
   return <>
-    <PageHeading eyebrow={selectedAccount ? "Account history" : "Money activity"} title={selectedAccount ? selectedAccount.name : "Transactions"} description={`${filtered.length} records${selectedAccount ? ` for ${selectedAccount.institution || selectedAccount.name}` : ""} · Search, filter and review every movement.`} action={<Button className="rounded-full px-5" onClick={() => setAddOpen(true)}><Plus className="size-4" /> Add transaction</Button>} />
-    {accountId && <div className="mb-4 flex min-h-12 items-center justify-between gap-3 rounded-2xl border border-info/20 bg-info/10 px-4 text-sm" role="status">
-      <span>{selectedAccount ? <>Showing only <strong>{selectedAccount.name}</strong></> : "This account is unavailable or you do not have access to it."}</span>
-      <Button type="button" size="sm" variant="ghost" onClick={() => selectAccount("all")}>Clear account</Button>
-    </div>}
-    <Card className="overflow-hidden">
-      <div className="flex flex-col gap-3 border-b border-border bg-elevated/30 p-4 sm:flex-row sm:items-center sm:p-5">
-        <div className="relative flex-1"><Search className="absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted"/><Input id="global-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search merchant, amount, category, account…" className="pl-10"/>{search && <button onClick={() => setSearch("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted" aria-label="Clear search"><X className="size-4" /></button>}</div>
-        <Button variant="secondary" onClick={() => setFiltersOpen((value) => !value)}><SlidersHorizontal className="size-4"/> Filters {activeFilters > 0 && <span className="rounded-full bg-brand px-1.5 text-[10px] text-white">{activeFilters}</span>}</Button>
-        <Button variant="secondary" disabled={Boolean(accountId && accountTransactions === null)} onClick={() => { exportTransactionsCsv(filtered, data.accounts, data.categories); toast.success("CSV export prepared"); }}><Download className="size-4"/> Export</Button>
+    <PageHeading eyebrow={selectedAccount ? "Account history" : "Money activity"} title={selectedAccount?.name ?? "Transactions"} description={String(result?.total ?? "…")+" matching records · Review every movement."} action={<Button onClick={() => setAddOpen(true)}><Plus className="size-4"/>Add transaction</Button>}/>
+    {selectedAccount && <AccountHistorySummary accountId={selectedAccount.id} from={query.dateFrom} to={query.dateTo}/>}
+    {result?.cached && <p role="status" className="mb-4 rounded-xl border p-3 text-sm">Offline: showing only your recently cached transactions and pending entries. Connect for complete history, reporting, and export.</p>}
+    {query.account && <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-2xl border p-3 text-sm"><span>Showing only <strong>{selectedAccount?.name ?? "selected account"}</strong></span><Button size="sm" variant="ghost" onClick={() => change({account:undefined})}>Clear account</Button></div>}
+    <Card>
+      <div className="flex min-w-0 flex-col gap-3 border-b p-4 sm:flex-row sm:flex-wrap sm:items-center">
+        <div className="relative min-w-0 flex-1"><Search className="absolute left-3 top-4 size-4 text-muted"/><Input aria-label="Search transactions" id="global-search" placeholder="Search merchant, reference or notes…" className="pl-10" value={query.search ?? ""} onChange={(event) => change({search:event.target.value})}/></div>
+        <Button variant="secondary" onClick={() => setFiltersOpen(!filtersOpen)}><SlidersHorizontal className="size-4"/>Filters</Button>
+        <Select aria-label="Sort transactions" className="sm:w-52" value={query.sort} onChange={(event) => change({sort:event.target.value})}>{transactionSorts.map((sort,index) => <option key={sort} value={sort}>{sortLabels[index]}</option>)}</Select>
+        <Button variant="secondary" disabled={exporting} onClick={() => { setExporting(true); void exportTransactions(query).then((rows) => { exportTransactionsCsv(rows,data.accounts,data.categories); toast.success("CSV export prepared"); }).catch((error) => toast.error(error.message)).finally(() => setExporting(false)); }}><Download className="size-4"/>{exporting ? "Exporting…" : "Export"}</Button>
       </div>
-      {filtersOpen && <div className="grid gap-3 border-b bg-canvas/50 p-4 sm:grid-cols-3 sm:p-5">
-        <label className="text-xs font-bold">Type<Select className="mt-1.5" value={type} onChange={(e) => setType(e.target.value as TransactionType | "all")}><option value="all">All types</option><option value="expense">Expenses</option><option value="income">Income</option><option value="transfer">Transfers</option><option value="refund">Refunds</option><option value="adjustment">Adjustments</option></Select></label>
-        <label className="text-xs font-bold">Account<Select className="mt-1.5" value={accountId ?? "all"} onChange={(e) => selectAccount(e.target.value)}><option value="all">All accounts</option>{data.accounts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></label>
-        <label className="text-xs font-bold">Category<Select className="mt-1.5" value={category} onChange={(e) => setCategory(e.target.value)}><option value="all">All categories</option>{data.categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></label>
+      {filtersOpen && <div className="grid min-w-0 gap-4 border-b p-4 sm:grid-cols-2 lg:grid-cols-3" aria-label="Transaction filters">
+        <Field label="Date"><Select value={preset} onChange={(event) => { const value=event.target.value as DatePreset; const range=value === "custom" ? {} : dateRange(value); change({datePreset:value,dateFrom:range.dateFrom,dateTo:range.dateTo}); }}>{datePresets.map((value,index) => <option key={value} value={value}>{presetLabels[index]}</option>)}</Select></Field>
+        <Field label="Account"><Select value={query.account ?? ""} onChange={(event) => change({account:event.target.value})}><option value="">All accounts</option>{data.accounts.map((row) => <option key={row.id} value={row.id}>{row.name}{row.archived ? " (archived)" : ""}</option>)}</Select></Field>
+        <Field label="Category"><Select value={query.category ?? ""} onChange={(event) => change({category:event.target.value})}><option value="">All categories</option>{data.categories.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}</Select></Field>
+        <Field label="Type"><Select value={query.type ?? ""} onChange={(event) => change({type:event.target.value})}><option value="">All types</option>{["expense","income","transfer","refund","adjustment"].map((type) => <option key={type} value={type}>{type}</option>)}</Select></Field>
+        <Field label="Minimum amount"><Input inputMode="decimal" value={query.minAmount ?? ""} onChange={(event) => change({minAmount:event.target.value})}/></Field>
+        <Field label="Maximum amount"><Input inputMode="decimal" value={query.maxAmount ?? ""} onChange={(event) => change({maxAmount:event.target.value})}/></Field>
+        <Field label="Source"><Select value={query.source ?? ""} onChange={(event) => change({source:event.target.value})}><option value="">All sources</option>{["manual","voice","csv","xlsx","pdf","ocr","recurring"].map((source) => <option key={source}>{source}</option>)}</Select></Field>
+        {preset === "custom" && <div className="grid min-w-0 gap-3 sm:col-span-2 sm:grid-cols-3"><Field label="From"><Input type="date" value={custom.from} onChange={(event) => setCustom({...custom,from:event.target.value})}/></Field><Field label="To"><Input type="date" value={custom.through} onChange={(event) => setCustom({...custom,through:event.target.value})}/></Field><Button className="self-end" onClick={() => { try { change({...dateRange("custom",new Date(),custom.from,custom.through)}); } catch(error) { toast.error((error as Error).message); } }}>Apply date range</Button></div>}
+        <Button variant="ghost" onClick={() => window.history.replaceState(null,"","/transactions")}>Clear all filters</Button>
       </div>}
-      <div className="hidden grid-cols-[minmax(0,1fr)_98px_92px_92px_72px] gap-3 border-b border-border bg-background/35 px-6 py-3 text-[10px] font-bold uppercase tracking-[.14em] text-muted-foreground sm:grid"><span>Transaction</span><span>Date</span><span>Type</span><span className="text-right">Amount</span><span /></div>
-      <CardContent className="px-4 py-1 sm:px-6">
-        {accountId && accountTransactions === null ? <div className="py-20 text-center text-sm text-muted" aria-live="polite">Loading this account’s history…</div> : filtered.length ? filtered.map((transaction) => <TransactionRow key={transaction.id} transaction={transaction} accounts={data.accounts} categories={data.categories} onDelete={remove} onEdit={setEditing} />) : <div className="py-20 text-center"><span className="mx-auto mb-4 grid size-12 place-items-center rounded-2xl bg-accent text-brand"><Filter className="size-5" /></span><h2 className="font-bold">No matching transactions</h2><p className="mt-1 text-sm text-muted">Try clearing a filter or changing your search.</p></div>}
+      <CardContent className="min-w-0 px-4 py-1 sm:px-6">
+        {error ? <div role="alert" className="py-10 text-sm">{error}<Button onClick={refresh} variant="secondary" className="mt-3">Retry</Button></div>
+          : !result ? <p role="status" className="py-12 text-center">Loading transactions…</p>
+          : result.rows.length ? result.rows.map((row,index) => <div key={row.id}>
+            {(query.sort === "newest" || query.sort === "oldest") && row.date !== result.rows[index-1]?.date && <h2 className="eyebrow pt-5 sm:hidden">{format(new Date(row.date+"T12:00:00"),"EEEE, d MMM yyyy")}</h2>}
+            <TransactionRow transaction={row} accounts={data.accounts} categories={data.categories} onEdit={setEditing} onDelete={remove}/>
+          </div>) : <div className="py-16 text-center"><Filter className="mx-auto mb-4 size-6"/><h2 className="font-semibold">No matching transactions</h2><p className="mt-2 text-sm text-muted">Try a different period or clear a filter.</p></div>}
       </CardContent>
+      {result && <div className="flex flex-wrap items-center justify-between gap-2 border-t p-4"><Button variant="secondary" disabled={!query.page} onClick={() => change({page:String((query.page ?? 0)-1)})}>Previous</Button><span className="text-xs">Page {(query.page ?? 0)+1} of {Math.max(Math.ceil(result.total/25),1)}</span><Button variant="secondary" disabled={((query.page ?? 0)+1)*25 >= result.total} onClick={() => change({page:String((query.page ?? 0)+1)})}>Next</Button></div>}
     </Card>
-    <TransactionModal open={addOpen} onClose={() => setAddOpen(false)} />
-    <TransactionModal open={Boolean(editing)} onClose={() => setEditing(undefined)} transaction={editing} />
+    <TransactionModal open={addOpen} onClose={() => { setAddOpen(false); refresh(); }}/>
+    <TransactionModal open={Boolean(editing || exact)} transaction={editing ?? exact} onClose={() => { setEditing(undefined); if(query.id) change({id:undefined}); refresh(); }}/>
   </>;
+}
+
+function AccountHistorySummary({accountId,from,to}:{accountId:string;from?:string;to?:string}) {
+  const {data}=useFinance(); const account=data.accounts.find((row)=>row.id===accountId)!;
+  const {result,error}=usePeriodReport(from ?? "0001-01-01",to ?? "9999-12-31",accountId);
+  return <Card className="mb-4 p-4"><p className="text-sm font-semibold">{account.institution} · {account.type.replaceAll("_"," ")} · {account.archived ? "Archived" : "Active"}</p><div className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-4">{[["Current balance",account.archived && !data.demo ? null : accountBalance(account,data.transactions)],["Income",result?.income],["Expenses",result?.expenses],["Transfers",result?.transfers]].map(([label,value])=><div key={String(label)} className="min-w-0"><p className="eyebrow">{label}</p><p className="amount mt-1 break-words font-semibold">{typeof value==="bigint"?formatMoney(value,data.profile.currency):value===null?"Archived":"…"}</p></div>)}</div>{error&&<p role="alert" className="mt-3 text-sm">{error}</p>}</Card>;
 }

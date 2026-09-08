@@ -5,6 +5,10 @@ import type { FinanceData } from "@/features/finance/types";
 const mocks = vi.hoisted(() => ({ useFinance: vi.fn() }));
 
 vi.mock("@/features/finance/finance-provider", () => ({ useFinance: mocks.useFinance }));
+vi.mock("@/features/finance/use-finance-query", () => ({
+  usePeriodReport: () => ({ result: { income: 0n, expenses: 0n, transfers: 0n, categories: [], months: [], days: [], budgets: [], count: 0 } }),
+  useTransactions: () => ({ result: { rows: [], total: 0 } }),
+}));
 vi.mock("@/features/dashboard/cashflow-chart", () => ({ BalanceTrendChart: () => <div data-testid="balance-chart" /> }));
 vi.mock("@/features/dashboard/spending-ring", () => ({ SpendingRing: () => <div data-testid="spending-ring" /> }));
 vi.mock("@/features/transactions/transaction-row", () => ({ TransactionRow: () => null }));

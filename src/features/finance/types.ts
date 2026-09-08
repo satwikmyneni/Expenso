@@ -58,6 +58,7 @@ export interface Category {
   parentId?: string;
   archived?: boolean;
   isDefault?: boolean;
+  sortOrder?: number;
 }
 
 export interface FinanceTransaction {
@@ -70,6 +71,8 @@ export interface FinanceTransaction {
   currency: string;
   date: string;
   merchant: string;
+  occurredAt?: string;
+  importedAt?: string;
   description?: string;
   notes?: string;
   tags: string[];
@@ -166,6 +169,9 @@ export interface Goal {
   targetDate: string;
   color: string;
   icon: string;
+  description?: string;
+  linkedAccountId?: string;
+  status?: "active" | "completed" | "paused" | "archived";
 }
 
 export interface GoalContribution {
@@ -213,7 +219,9 @@ export interface RecurringItem {
   frequency: "daily" | "weekly" | "monthly" | "quarterly" | "yearly" | "custom";
   nextDate: string;
   kind: "subscription" | "bill" | "recurring";
-  status: "active" | "paused" | "due";
+  status: "active" | "paused" | "due" | "paid" | "cancelled" | "archived";
+  notes?: string;
+  reminderDays?: number[];
 }
 
 export interface FinanceData {
@@ -239,6 +247,7 @@ export interface TransactionDraft {
   type: TransactionType;
   amount: string;
   date: string;
+  occurredAt?: string;
   merchant: string;
   notes?: string;
   paymentMethod?: string;
@@ -260,6 +269,8 @@ export interface CategoryDraft {
   icon: string;
   color: string;
   kind: Category["kind"];
+  parentId?: string;
+  sortOrder?: number;
 }
 
 export interface ProfileDraft {
@@ -277,4 +288,6 @@ export interface RecurringDraft {
   frequency: RecurringItem["frequency"];
   nextDate: string;
   kind: RecurringItem["kind"];
+  notes?: string;
+  reminderDays?: number[];
 }

@@ -5,8 +5,8 @@ import type { FinanceTransaction } from "@/features/finance/types";
 import { monthlyTrend } from "@/features/finance/calculations";
 import { formatMoney } from "@/features/finance/money";
 
-export function BalanceTrendChart({ transactions, currency, currentBalance, months }: { transactions: FinanceTransaction[]; currency: string; currentBalance: bigint; months: number }) {
-  const trend = monthlyTrend(transactions, new Date(), months);
+export function BalanceTrendChart({ transactions, currency, currentBalance, months, reportTrend }: { transactions: FinanceTransaction[]; currency: string; currentBalance: bigint; months: number; reportTrend?: ReturnType<typeof monthlyTrend> }) {
+  const trend = reportTrend ?? monthlyTrend(transactions, new Date(), months);
   const totalMovement = trend.reduce((total, item) => total + item.incomeMinor - item.expenseMinor, 0n);
   const startingBalance = currentBalance - totalMovement;
   const data = trend.map((item, index) => ({
@@ -29,9 +29,9 @@ export function BalanceTrendChart({ transactions, currency, currentBalance, mont
   </div>;
 }
 
-export function CashflowChart({ transactions, currency }: { transactions: FinanceTransaction[]; currency: string }) {
-  const data = monthlyTrend(transactions).map((item) => ({ month: item.month, income: Number(item.incomeMinor) / 100, spending: Number(item.expenseMinor) / 100 }));
-  return <div className="h-[245px] w-full" aria-label="Six month income and spending chart">
+export function CashflowChart({ transactions, currency, reportTrend }: { transactions: FinanceTransaction[]; currency: string; reportTrend?: ReturnType<typeof monthlyTrend> }) {
+  const data = (reportTrend ?? monthlyTrend(transactions)).map((item) => ({ month: item.month, income: Number(item.incomeMinor) / 100, spending: Number(item.expenseMinor) / 100 }));
+  return <div className="h-[245px] w-full" aria-label="Income and spending chart">
     <ResponsiveContainer width="100%" height="100%">
       <AreaChart data={data} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}>
         <defs>

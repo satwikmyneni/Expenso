@@ -26,6 +26,8 @@ import type {
 } from "./types";
 import { minorToDecimal, parseMoney } from "./money";
 import type { LiabilityReminderCandidate } from "./liability-reminders";
+import type { TransactionPage, TransactionQuery } from "@/features/transactions/query";
+import { decodeReport } from "@/features/insights/reports";
 
 type AccountRow = Tables<"accounts">;
 type AccountBalanceRow = Tables<"account_balances">;
@@ -87,7 +89,7 @@ function transactionInsert(userId: string, draft: TransactionDraft, currency: st
     type: draft.type,
     amount: databaseNumber(parseMoney(draft.amount)),
     currency,
-    occurred_at: new Date(`${draft.date}T12:00:00`).toISOString(),
+    occurred_at: draft.occurredAt ?? new Date(`${draft.date}T12:00:00`).toISOString(),
     merchant: draft.merchant.trim(),
     description: draft.description?.trim() || null,
     notes: draft.notes?.trim() || null,
@@ -137,10 +139,10 @@ function mapAccount(row: AccountRow, balance?: AccountBalanceRow): Account {
 
 function mapCategory(row: CategoryRow): Category {
   const kind = row.kind === "income" || row.kind === "both" ? row.kind : "expense";
-  return { id: row.id, name: row.name, icon: row.icon, color: row.color, kind, parentId: row.parent_id ?? undefined, archived: row.archived_at !== null, isDefault: row.is_default };
+  return { id: row.id, name: row.name, icon: row.icon, color: row.color, kind, parentId: row.parent_id ?? undefined, sortOrder: row.sort_order, archived: row.archived_at !== null, isDefault: row.is_default };
 }
 
-function mapTransaction(row: TransactionRow): FinanceTransaction {
+function mapTransaction(row: TransactionRow & { uploaded_at?: string; local_date?: string }): FinanceTransaction {
   const metadata = row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata) ? row.metadata : {};
   const loanPrincipal = metadata.loan_principal;
   const loanInterest = metadata.loan_interest;
@@ -152,7 +154,9 @@ function mapTransaction(row: TransactionRow): FinanceTransaction {
     type: row.type,
     amountMinor: decimalMinor(row.amount),
     currency: row.currency,
-    date: row.occurred_at.slice(0, 10),
+    date: row.local_date ?? row.occurred_at.slice(0, 10),
+    occurredAt: row.occurred_at,
+    importedAt: row.uploaded_at,
     merchant: row.merchant,
     description: row.description ?? undefined,
     notes: row.notes ?? undefined,
@@ -197,6 +201,9 @@ function mapGoal(row: GoalRow): Goal {
     targetDate: row.target_date ?? "",
     color: row.color,
     icon: row.icon,
+    description: row.description ?? undefined,
+    linkedAccountId: row.linked_account_id ?? undefined,
+    status: row.status as Goal["status"],
   };
 }
 
@@ -260,15 +267,15 @@ function recurringFrequency(value: string): RecurringItem["frequency"] {
 }
 
 function mapRecurring(row: RecurringRow): RecurringItem {
-  return { id: row.id, title: row.title, amountMinor: decimalMinor(row.amount), type: row.type === "income" ? "income" : "expense", accountId: row.account_id, categoryId: row.category_id ?? undefined, frequency: recurringFrequency(row.frequency), nextDate: row.next_date, kind: "recurring", status: row.active ? "active" : "paused" };
+  return { id: row.id, title: row.title, amountMinor: decimalMinor(row.amount), type: row.type === "income" ? "income" : "expense", accountId: row.account_id, categoryId: row.category_id ?? undefined, frequency: recurringFrequency(row.frequency), nextDate: row.next_date, kind: "recurring", notes: row.notes ?? undefined, status: row.archived_at ? "archived" : row.active ? "active" : "paused" };
 }
 
 function mapSubscription(row: SubscriptionRow): RecurringItem {
-  return { id: row.id, title: row.title, amountMinor: decimalMinor(row.estimated_amount), type: "expense", accountId: row.account_id ?? undefined, categoryId: row.category_id ?? undefined, frequency: recurringFrequency(row.frequency), nextDate: row.next_expected_date ?? row.last_payment_date ?? "", kind: "subscription", status: row.status === "paused" ? "paused" : "active" };
+  return { id: row.id, title: row.title, amountMinor: decimalMinor(row.estimated_amount), type: "expense", accountId: row.account_id ?? undefined, categoryId: row.category_id ?? undefined, frequency: recurringFrequency(row.frequency), nextDate: row.next_expected_date ?? row.last_payment_date ?? "", kind: "subscription", status: row.status === "cancelled" ? "cancelled" : "active" };
 }
 
 function mapBill(row: BillRow): RecurringItem {
-  return { id: row.id, title: row.title, amountMinor: decimalMinor(row.amount), type: "expense", accountId: row.account_id ?? undefined, categoryId: row.category_id ?? undefined, frequency: recurringFrequency(row.frequency ?? "monthly"), nextDate: row.due_date, kind: "bill", status: row.status === "overdue" || row.status === "due" ? "due" : "active" };
+  return { id: row.id, title: row.title, amountMinor: decimalMinor(row.amount), type: "expense", accountId: row.account_id ?? undefined, categoryId: row.category_id ?? undefined, frequency: recurringFrequency(row.frequency ?? "monthly"), nextDate: row.due_date, kind: "bill", status: row.status === "paid" ? "paid" : row.status === "overdue" ? "due" : "active", notes: row.notes ?? undefined, reminderDays: row.reminder_days };
 }
 
 function mapProfile(row: Tables<"profiles">, email: string, firstName?: string): Profile {
@@ -280,13 +287,29 @@ export class FinanceRepository {
   constructor(private readonly client: SupabaseClient<Database>) {}
 
   private async loadTransactions(): Promise<LoadResult<TransactionRow[]>> {
-    const pageSize = 1000;
-    const rows: TransactionRow[] = [];
-    for (let from = 0; ; from += pageSize) {
-      const result = await this.client.from("transactions").select("*").order("occurred_at", { ascending: false }).range(from, from + pageSize - 1);
-      if (result.error) return { data: rows, error: result.error };
-      rows.push(...result.data);
-      if (result.data.length < pageSize) return { data: rows, error: null };
+    const result = await this.client.rpc("search_finance_transactions", { filters: { pageSize: 100 } });
+    return { data: result.data ? (result.data as unknown as { rows: TransactionRow[] }).rows : [], error: result.error };
+  }
+
+  async queryTransactions(query: TransactionQuery): Promise<TransactionPage> {
+    const result = await this.client.rpc("search_finance_transactions", { filters: { ...query } as Json });
+    if (result.error) throw dataError(result.error, "load");
+    const value = result.data as unknown as { total: number; rows: TransactionRow[] };
+    return { total: value.total, rows: value.rows.map(mapTransaction) };
+  }
+
+  async periodReport(start: string, end: string, account?: string) {
+    const result = await this.client.rpc("finance_period_report", { date_from: start, date_to: end, account_filter: account });
+    if (result.error) throw dataError(result.error, "load");
+    return decodeReport(result.data);
+  }
+
+  async exportTransactions(query: TransactionQuery = {}) {
+    const rows: FinanceTransaction[] = [];
+    for (let page = 0; ; page++) {
+      const result = await this.queryTransactions({ ...query, page, pageSize: 100 });
+      rows.push(...result.rows);
+      if (rows.length >= result.total || !result.rows.length) return rows;
     }
   }
 
@@ -316,11 +339,11 @@ export class FinanceRepository {
         this.client.from("categories").select("*").order("sort_order"),
         this.loadTransactions(),
         this.client.from("budgets").select("*, budget_categories(category_id)").eq("active", true),
-        this.client.from("goals").select("*"),
+        this.client.from("goals").select("*").neq("status", "archived"),
         this.client.from("goal_contributions").select("*").order("contributed_at", { ascending: false }),
-        this.client.from("recurring_transactions").select("*").eq("active", true),
-        this.client.from("subscriptions").select("*").eq("status", "active"),
-        this.client.from("bills").select("*").in("status", ["upcoming", "overdue", "due"]),
+        this.client.from("recurring_transactions").select("*").is("archived_at", null),
+        this.client.from("subscriptions").select("*").neq("status", "dismissed"),
+        this.client.from("bills").select("*").neq("status", "dismissed"),
         this.client.from("notifications").select("*").order("created_at", { ascending: false }).limit(100),
         this.client.from("notification_preferences").select("*").eq("user_id", userId).single(),
         this.client.from("merchant_rules").select("*").order("priority", { ascending: false }),
@@ -380,7 +403,7 @@ export class FinanceRepository {
       category_id: draft.categoryId || null,
       type: draft.type,
       amount: databaseNumber(parseMoney(draft.amount)),
-      occurred_at: new Date(`${draft.date}T12:00:00`).toISOString(),
+      occurred_at: draft.occurredAt ?? new Date(`${draft.date}T12:00:00`).toISOString(),
       merchant: draft.merchant.trim(),
       description: draft.description?.trim() || null,
       notes: draft.notes?.trim() || null,
@@ -448,7 +471,7 @@ export class FinanceRepository {
   }
 
   async createCategory(userId: string, category: CategoryDraft): Promise<Category> {
-    const payload: TablesInsert<"categories"> = { user_id: userId, name: category.name.trim(), kind: category.kind, icon: category.icon, color: category.color };
+    const payload: TablesInsert<"categories"> = { user_id: userId, name: category.name.trim(), kind: category.kind, icon: category.icon, color: category.color, parent_id: category.parentId ?? null, sort_order: category.sortOrder ?? 0 };
     const result = await this.client.from("categories").insert(payload).select("*").single();
     if (result.error) throw dataError(result.error);
     return mapCategory(result.data);
@@ -457,6 +480,12 @@ export class FinanceRepository {
   async archiveCategory(id: string) {
     const result = await this.client.rpc("archive_category_safely", { target_category_id: id });
     if (result.error) throw dataError(result.error, "delete");
+  }
+
+  async updateCategory(userId: string, id: string, category: CategoryDraft) {
+    const result = await this.client.from("categories").update({ name: category.name.trim(), kind: category.kind, icon: category.icon, color: category.color, parent_id: category.parentId ?? null, sort_order: category.sortOrder ?? 0 }).eq("id", id).eq("user_id", userId).select("*").single();
+    if (result.error) throw dataError(result.error);
+    return mapCategory(result.data);
   }
 
   async findImportByHash(userId: string, fileHash: string) {
@@ -545,8 +574,8 @@ export class FinanceRepository {
     return mapMerchantRule(result.data);
   }
 
-  async updateMerchantRule(userId: string, id: string, categoryId: string) {
-    const result = await this.client.from("merchant_rules").update({ category_id: categoryId, enabled: true }).eq("id", id).eq("user_id", userId).select("*").single();
+  async updateMerchantRule(userId: string, id: string, categoryId: string, draft?: MerchantRuleDraft) {
+    const result = await this.client.from("merchant_rules").update({ category_id: categoryId, enabled: true, ...(draft ? { pattern: draft.pattern, merchant_normalized: draft.merchantNormalized, account_id: draft.accountId ?? null, transaction_type: draft.transactionType ?? null, match_type: "exact" } : {}) }).eq("id", id).eq("user_id", userId).select("*").single();
     if (result.error) throw dataError(result.error);
     return mapMerchantRule(result.data);
   }
@@ -579,22 +608,48 @@ export class FinanceRepository {
   }
 
   async createBudget(userId: string, budget: Omit<Budget, "id">): Promise<Budget> {
-    const payload: TablesInsert<"budgets"> = { user_id: userId, name: budget.name.trim(), limit_amount: databaseNumber(budget.limitMinor), period: budget.period, alert_threshold: budget.alertThreshold, rollover: budget.rollover };
-    const result = await this.client.from("budgets").insert(payload).select("*").single();
+    void userId;
+    return this.saveBudget(budget);
+  }
+
+  async saveBudget(budget: Omit<Budget,"id">, id?: string): Promise<Budget> {
+    const result = await this.client.rpc("save_budget_details", { target_id: id ?? null, details: { name: budget.name.trim(), amount: minorToDecimal(budget.limitMinor), period: budget.period, threshold: budget.alertThreshold, rollover: budget.rollover }, category_ids: budget.categoryIds });
     if (result.error) throw dataError(result.error);
-    if (budget.categoryIds.length) {
-      const categoryLinks: TablesInsert<"budget_categories">[] = budget.categoryIds.map((categoryId) => ({ user_id: userId, budget_id: result.data.id, category_id: categoryId }));
-      const categories = await this.client.from("budget_categories").insert(categoryLinks);
-      if (categories.error) throw dataError(categories.error);
-    }
-    return { ...mapBudget({ ...result.data, budget_categories: [] }), categoryIds: budget.categoryIds };
+    return { ...budget, id: result.data };
+  }
+
+  async archiveBudget(userId: string, id: string) {
+    const result = await this.client.from("budgets").update({ active: false }).eq("id", id).eq("user_id", userId).select("id").single();
+    if (result.error) throw dataError(result.error);
   }
 
   async createGoal(userId: string, goal: Omit<Goal, "id">): Promise<Goal> {
-    const payload: TablesInsert<"goals"> = { user_id: userId, name: goal.name.trim(), target_amount: databaseNumber(goal.targetMinor), current_amount: databaseNumber(goal.currentMinor), opening_amount: databaseNumber(goal.openingMinor ?? goal.currentMinor), target_date: goal.targetDate || null, color: goal.color, icon: goal.icon };
+    const payload: TablesInsert<"goals"> = { user_id: userId, name: goal.name.trim(), target_amount: databaseNumber(goal.targetMinor), current_amount: databaseNumber(goal.currentMinor), opening_amount: databaseNumber(goal.openingMinor ?? goal.currentMinor), target_date: goal.targetDate || null, color: goal.color, icon: goal.icon, description: goal.description ?? null, linked_account_id: goal.linkedAccountId ?? null };
     const result = await this.client.from("goals").insert(payload).select("*").single();
     if (result.error) throw dataError(result.error);
     return mapGoal(result.data);
+  }
+
+  async updateGoal(userId: string, id: string, goal: Omit<Goal,"id">) {
+    // Never write current_amount/opening_amount here: contribution history owns them.
+    const result = await this.client.from("goals").update({ name: goal.name.trim(), target_amount: databaseNumber(goal.targetMinor), target_date: goal.targetDate || null, description: goal.description ?? null, linked_account_id: goal.linkedAccountId ?? null, color: goal.color, icon: goal.icon }).eq("id", id).eq("user_id", userId).select("*").single();
+    if (result.error) throw dataError(result.error);
+    return mapGoal(result.data);
+  }
+
+  async archiveGoal(userId: string, id: string) {
+    const result = await this.client.from("goals").update({ status: "archived" }).eq("id", id).eq("user_id", userId).select("id").single();
+    if (result.error) throw dataError(result.error);
+  }
+
+  async receiptLinks(userId: string, transactionId: string) {
+    const result = await this.client.from("attachments").select("id,file_name,storage_path").eq("user_id", userId).eq("transaction_id", transactionId);
+    if (result.error) throw dataError(result.error, "load");
+    return Promise.all(result.data.map(async (row) => {
+      const signed = await this.client.storage.from("receipts").createSignedUrl(row.storage_path, 60);
+      if (signed.error) throw new Error("Unable to open this private receipt.");
+      return { id: row.id, name: row.file_name, url: signed.data.signedUrl };
+    }));
   }
 
   async createGoalContribution(userId: string, draft: GoalContributionDraft): Promise<GoalContribution> {
@@ -631,7 +686,7 @@ export class FinanceRepository {
 
   async createRecurringItem(userId: string, draft: RecurringDraft, currency: string): Promise<RecurringItem> {
     if (draft.kind === "bill") {
-      const payload: TablesInsert<"bills"> = { user_id: userId, title: draft.title.trim(), amount: databaseNumber(draft.amountMinor), category_id: draft.categoryId || null, account_id: draft.accountId || null, currency, due_date: draft.nextDate, frequency: draft.frequency, status: "upcoming" };
+      const payload: TablesInsert<"bills"> = { user_id: userId, title: draft.title.trim(), amount: databaseNumber(draft.amountMinor), category_id: draft.categoryId || null, account_id: draft.accountId || null, currency, due_date: draft.nextDate, frequency: draft.frequency, notes: draft.notes ?? null, reminder_days: draft.reminderDays ?? [3,1], status: "upcoming" };
       const result = await this.client.from("bills").insert(payload).select("*").single();
       if (result.error) throw dataError(result.error);
       return mapBill(result.data);
@@ -643,7 +698,7 @@ export class FinanceRepository {
       return mapSubscription(result.data);
     }
     if (!draft.accountId) throw new Error("Choose an account for the recurring transaction.");
-    const payload: TablesInsert<"recurring_transactions"> = { user_id: userId, title: draft.title.trim(), merchant: draft.title.trim(), amount: databaseNumber(draft.amountMinor), type: draft.type, category_id: draft.categoryId || null, account_id: draft.accountId, currency, frequency: draft.frequency, start_date: draft.nextDate, next_date: draft.nextDate };
+    const payload: TablesInsert<"recurring_transactions"> = { user_id: userId, title: draft.title.trim(), merchant: draft.title.trim(), amount: databaseNumber(draft.amountMinor), type: draft.type, category_id: draft.categoryId || null, account_id: draft.accountId, currency, frequency: draft.frequency, start_date: draft.nextDate, next_date: draft.nextDate, notes: draft.notes ?? null };
     const result = await this.client.from("recurring_transactions").insert(payload).select("*").single();
     if (result.error) throw dataError(result.error);
     return mapRecurring(result.data);
@@ -654,5 +709,16 @@ export class FinanceRepository {
     const result = await this.client.from("profiles").update(payload).eq("id", userId).select("*").single();
     if (result.error) throw dataError(result.error);
     return mapProfile(result.data, email, firstName);
+  }
+
+  async updateRecurringItem(userId: string, item: RecurringItem) {
+    const common = { title: item.title.trim(), account_id: item.accountId ?? null, category_id: item.categoryId ?? null, frequency: item.frequency };
+    const result = item.kind === "bill"
+      ? await this.client.from("bills").update({ ...common, amount: databaseNumber(item.amountMinor), due_date: item.nextDate, notes: item.notes ?? null, reminder_days: item.reminderDays ?? [3,1], status: item.status === "paid" ? "paid" : item.status === "archived" ? "dismissed" : item.status === "due" ? "overdue" : "upcoming" }).eq("id",item.id).eq("user_id",userId).select("id").single()
+      : item.kind === "subscription"
+        ? await this.client.from("subscriptions").update({ ...common, merchant: item.title.trim(), estimated_amount: databaseNumber(item.amountMinor), next_expected_date: item.nextDate, status: item.status === "cancelled" ? "cancelled" : item.status === "archived" ? "dismissed" : "active" }).eq("id",item.id).eq("user_id",userId).select("id").single()
+        : await this.client.from("recurring_transactions").update({ ...common, account_id: item.accountId!, amount: databaseNumber(item.amountMinor), type: item.type, next_date: item.nextDate, notes: item.notes ?? null, active: item.status === "active", archived_at: item.status === "archived" ? new Date().toISOString() : null }).eq("id",item.id).eq("user_id",userId).select("id").single();
+    if (result.error) throw dataError(result.error);
+    return item;
   }
 }

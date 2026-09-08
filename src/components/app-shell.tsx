@@ -138,7 +138,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </header>
       {connectionState === "cached" && <div className="border-b border-warning/25 bg-warning/10 px-4 py-2.5 text-center text-xs font-semibold text-warning" role="status">{connectionError}</div>}
-      <main className="mx-auto w-full max-w-[1660px] px-4 pb-28 pt-7 sm:px-7 lg:px-8 lg:pb-12 lg:pt-8 xl:px-10">{children}</main>
+      <main className="mx-auto min-w-0 w-full max-w-[1660px] px-4 pb-28 pt-7 sm:px-7 lg:px-8 lg:pb-12 lg:pt-8 xl:px-10">{children}</main>
     </div>
 
     <nav className="fixed inset-x-0 bottom-0 z-40 grid h-[76px] grid-cols-5 border-t border-border bg-primary/95 px-2 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl lg:hidden" aria-label="Mobile navigation">

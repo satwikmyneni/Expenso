@@ -25,7 +25,7 @@ const sections = [
 ];
 
 export default function SettingsPage() {
-  const { data, resetDemo, updateProfile, setPushNotifications } = useFinance();
+  const { data, resetDemo, updateProfile, setPushNotifications, exportTransactions } = useFinance();
   const [section, setSection] = useState("profile");
   const [theme, setTheme] = useState("system");
   const file = useRef<HTMLInputElement>(null);
@@ -101,7 +101,7 @@ export default function SettingsPage() {
 
         {section === "data" && <SettingsSection title="Your data" description="Export a portable copy or validate a structured backup.">
           <div className="grid gap-3 sm:grid-cols-2">
-            <button onClick={() => downloadBackup(data)} className="rounded-2xl border p-5 text-left transition hover:bg-canvas"><Download className="size-5 text-brand" /><p className="mt-5 text-sm font-bold">Download backup</p><p className="mt-1 text-xs leading-5 text-muted">All supported records in a versioned JSON file</p></button>
+            <button onClick={() => void exportTransactions().then((transactions)=>downloadBackup({...data,transactions})).catch((error)=>toast.error(error.message))} className="rounded-2xl border p-5 text-left transition hover:bg-canvas"><Download className="size-5 text-brand" /><p className="mt-5 text-sm font-bold">Download backup</p><p className="mt-1 text-xs leading-5 text-muted">All supported records in a versioned JSON file</p></button>
             <button onClick={() => file.current?.click()} className="rounded-2xl border p-5 text-left transition hover:bg-canvas"><Upload className="size-5 text-brand" /><p className="mt-5 text-sm font-bold">Validate backup file</p><p className="mt-1 text-xs leading-5 text-muted">Check its structure without changing your data</p></button>
             <input ref={file} type="file" accept="application/json" className="sr-only" onChange={(event) => void validateBackup(event.target.files?.[0])} />
           </div>

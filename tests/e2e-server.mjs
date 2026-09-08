@@ -8,7 +8,7 @@ const handle = app.getRequestHandler();
 
 await app.prepare();
 const server = createServer((request, response) => handle(request, response));
-server.listen(port, hostname);
+server.listen(port, hostname, () => process.send?.("ready"));
 
 const close = () => {
   server.close(() => process.exit(0));

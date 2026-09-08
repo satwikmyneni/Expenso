@@ -10,9 +10,9 @@ import { useFinance } from "@/features/finance/finance-provider";
 import type { Account, AccountDraft } from "@/features/finance/types";
 import { loadedAccountDeleteBlocker } from "./account-deletion";
 
-export function ManagedAccountCard({ account, balance, compact = false }: { account: Account; balance: bigint; compact?: boolean }) {
+export function ManagedAccountCard({ account, balance, compact = false, initiallyEditing = false }: { account: Account; balance: bigint; compact?: boolean; initiallyEditing?: boolean }) {
   const { data, updateAccount, deleteAccount, archiveAccount } = useFinance();
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(initiallyEditing);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const deleteBlocker = loadedAccountDeleteBlocker(data, account.id);

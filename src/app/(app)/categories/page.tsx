@@ -1,15 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import { Archive, ArrowUpRight, Plus, Store, Trash2 } from "lucide-react";
-import { endOfMonth, startOfMonth } from "date-fns";
+import Link from "next/link";
+import { Archive, Pencil, Plus } from "lucide-react";
+import { dateRange, transactionHref } from "@/features/transactions/query";
+import { usePeriodReport } from "@/features/finance/use-finance-query";
+import { MerchantRuleManager } from "@/features/imports/merchant-rule-manager";
 import { toast } from "sonner";
 import { PageHeading } from "@/components/page-heading";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, Input, Select } from "@/components/ui/field";
 import { Modal } from "@/components/ui/modal";
-import { spendingByCategory, transactionsInRange } from "@/features/finance/calculations";
+
 import { CategoryIcon } from "@/features/finance/category-icon";
 import { useFinance } from "@/features/finance/finance-provider";
 import { formatMoney, percentage, sumMoney } from "@/features/finance/money";
@@ -17,13 +20,14 @@ import type { Category } from "@/features/finance/types";
 import { financeColors } from "@/lib/theme";
 
 export default function CategoriesPage() {
-  const { data, addCategory, archiveCategory, updateMerchantRule, deleteMerchantRule } = useFinance();
+  const { data, addCategory, updateCategory, archiveCategory } = useFinance();
   const [open, setOpen] = useState(false);
+  const [editing,setEditing]=useState<Category>();
   const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState<{ name: string; kind: Category["kind"]; color: string }>({ name: "", kind: "expense", color: financeColors.accent });
-  const active = data.categories.filter((category) => !category.archived);
-  const current = transactionsInRange(data.transactions, startOfMonth(new Date()), endOfMonth(new Date()));
-  const spending = spendingByCategory(current);
+  const [form, setForm] = useState<{ name: string; kind: Category["kind"]; color: string; parentId: string; sortOrder: number }>({ name: "", kind: "expense", color: financeColors.accent, parentId:"",sortOrder:0 });
+  const active = data.categories.filter((category) => !category.archived).sort((a,b)=>(a.sortOrder??0)-(b.sortOrder??0)||a.name.localeCompare(b.name));
+  const range=dateRange("this_month"); const report=usePeriodReport(range.dateFrom!,range.dateTo!);
+  const spending=(report.result?.categories ?? []).map((row)=>({categoryId:row.id,amountMinor:row.amount}));
   const total = sumMoney(spending.map((item) => item.amountMinor));
 
   const submit = async (event: React.FormEvent) => {
@@ -31,10 +35,11 @@ export default function CategoriesPage() {
     if (form.name.trim().length < 2) return toast.error("Enter a category name.");
     setBusy(true);
     try {
-      await addCategory({ name: form.name, kind: form.kind, color: form.color, icon: "Circle" });
-      setForm({ name: "", kind: "expense", color: financeColors.accent });
+      const draft={name:form.name,kind:form.kind,color:form.color,icon:editing?.icon ?? "Circle",parentId:form.parentId||undefined,sortOrder:form.sortOrder};
+      if(editing) await updateCategory(editing.id,draft); else await addCategory(draft);
+      setForm({ name: "", kind: "expense", color: financeColors.accent,parentId:"",sortOrder:0 });
       setOpen(false);
-      toast.success("Category added.");
+      toast.success(editing ? "Category updated." : "Category added.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not add category.");
     } finally {
@@ -54,7 +59,7 @@ export default function CategoriesPage() {
   };
 
   return <>
-    <PageHeading eyebrow="Your system" title="Categories" description="A coordinated view of where money moves, built from your actual transactions." action={<Button className="rounded-full px-5" onClick={() => setOpen(true)}><Plus className="size-4" />Add category</Button>} />
+    <PageHeading eyebrow="Your system" title="Categories" description="A coordinated view of where money moves, built from your actual transactions." action={<Button className="rounded-full px-5" onClick={() => {setEditing(undefined);setForm({name:"",kind:"expense",color:financeColors.accent,parentId:"",sortOrder:0});setOpen(true);}}><Plus className="size-4" />Add category</Button>} />
     <Card className="mb-5 overflow-hidden">
       <CardHeader className="items-center pb-4 lg:pb-4"><div><p className="eyebrow mb-2">This month</p><CardTitle className="text-xl">Spending distribution</CardTitle></div><div className="text-right"><p className="text-[10px] uppercase tracking-[.14em] text-muted-foreground">Spent</p><p className="amount mt-1 text-xl font-semibold">{formatMoney(total, data.profile.currency)}</p></div></CardHeader>
       <CardContent className="pt-0">
@@ -69,22 +74,20 @@ export default function CategoriesPage() {
     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
       {active.map((category) => { const amount = spending.find((item) => item.categoryId === category.id)?.amountMinor ?? 0n; return <Card key={category.id} className="group transition hover:border-ring/35"><CardContent className="flex items-center gap-4 p-4 lg:p-4">
         <span className="grid size-11 shrink-0 place-items-center rounded-[14px]" style={{ backgroundColor: `${category.color}22`, color: category.color }}><CategoryIcon name={category.icon} className="size-5" /></span>
-        <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{category.name}</p><p className="mt-1 text-[11px] capitalize text-muted-foreground">{category.kind} · {formatMoney(amount, data.profile.currency)}</p></div>
-        {!category.isDefault ? <Button size="icon" variant="ghost" aria-label={`Archive ${category.name}`} onClick={() => void archive(category)}><Archive className="size-4" /></Button> : <ArrowUpRight className="size-4 text-muted-foreground" aria-hidden="true" />}
+        <div className="min-w-0 flex-1"><Link className="block min-h-11 truncate py-3 text-sm font-semibold hover:text-info" href={transactionHref({category:category.id,...range})}>{category.name}</Link>{category.parentId && <p className="truncate text-xs text-muted">Under {data.categories.find((row)=>row.id===category.parentId)?.name}</p>}<p className="mt-1 text-[11px] capitalize text-muted-foreground">{category.kind} · {formatMoney(amount, data.profile.currency)}</p></div>
+        {category.name.toLowerCase()!=="uncategorized" && <Button size="icon" variant="ghost" aria-label={`Edit ${category.name}`} onClick={()=>{setEditing(category);setForm({name:category.name,kind:category.kind,color:category.color,parentId:category.parentId ?? "",sortOrder:category.sortOrder ?? 0});setOpen(true);}}><Pencil className="size-4"/></Button>}
+        {!category.isDefault ? <Button size="icon" variant="ghost" aria-label={`Archive ${category.name}`} onClick={() => void archive(category)}><Archive className="size-4" /></Button> : null}
       </CardContent></Card>; })}
     </div>
-    <Card className="mt-5 overflow-hidden">
-      <CardHeader><div><p className="eyebrow mb-2">Deterministic learning</p><CardTitle>Merchant rules</CardTitle><p className="mt-2 text-sm text-muted-foreground">Private exact-match corrections used before built-in and keyword rules. Removing one never removes a transaction.</p></div><Store className="size-5 text-brand" /></CardHeader>
-      <CardContent className="px-5 pb-5 pt-0 sm:px-6 sm:pb-6">
-        {data.merchantRules.length ? <div className="divide-y divide-border">{data.merchantRules.map((rule) => <div key={rule.id} className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center"><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{rule.pattern}</p><p className="mt-1 text-xs text-muted-foreground">Exact personal rule · {rule.enabled ? "Active" : "Disabled because its category was archived"}</p></div><Select className="sm:w-56" aria-label={`Category for ${rule.pattern}`} value={rule.categoryId ?? ""} onChange={(event) => void updateMerchantRule(rule.id, event.target.value).then(() => toast.success("Merchant rule updated.")).catch((error) => toast.error(error instanceof Error ? error.message : "Could not update rule."))}><option value="">Choose category</option>{active.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</Select><Button size="icon" variant="ghost" aria-label={`Delete merchant rule for ${rule.pattern}`} onClick={() => { if (window.confirm(`Delete the rule for ${rule.pattern}? Existing transactions will not change.`)) void deleteMerchantRule(rule.id).then(() => toast.success("Merchant rule deleted.")).catch((error) => toast.error(error instanceof Error ? error.message : "Could not delete rule.")); }}><Trash2 className="size-4" /></Button></div>)}</div> : <p className="py-8 text-center text-sm text-muted-foreground">No personal rules yet. Correct a category during import and choose “Always categorize” to create one.</p>}
-      </CardContent>
-    </Card>
-    <Modal open={open} onClose={() => setOpen(false)} title="Add a category" description="Custom categories are private to your account.">
+    {report.error && <p role="alert">{report.error}</p>}
+    <MerchantRuleManager />
+    <Modal open={open} onClose={() => setOpen(false)} title={editing ? "Edit category" : "Add a category"} description="Custom categories are private to your account.">
       <form onSubmit={submit} className="grid gap-4 p-5 sm:p-6">
         <Field label="Category name"><Input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="e.g. Pet care" /></Field>
         <Field label="Used for"><Select value={form.kind} onChange={(event) => setForm({ ...form, kind: event.target.value as Category["kind"] })}><option value="expense">Expenses</option><option value="income">Income</option><option value="both">Income and expenses</option></Select></Field>
+        <Field label="Parent category"><Select value={form.parentId} onChange={(event)=>setForm({...form,parentId:event.target.value})}><option value="">Top level</option>{active.filter((row)=>row.id!==editing?.id).map((row)=><option key={row.id} value={row.id}>{row.name}</option>)}</Select></Field><Field label="Display order"><Input type="number" value={form.sortOrder} onChange={(event)=>setForm({...form,sortOrder:Number(event.target.value)})}/></Field>
         <Field label="Color"><Input type="color" value={form.color} onChange={(event) => setForm({ ...form, color: event.target.value })} className="h-12 p-1" /></Field>
-        <div className="flex justify-end gap-2 pt-2"><Button type="button" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button><Button type="submit" disabled={busy}>{busy ? "Adding…" : "Add category"}</Button></div>
+        <div className="flex justify-end gap-2 pt-2"><Button type="button" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button><Button type="submit" disabled={busy}>{busy ? "Saving…" : editing ? "Save category" : "Add category"}</Button></div>
       </form>
     </Modal>
   </>;

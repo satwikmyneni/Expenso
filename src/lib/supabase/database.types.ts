@@ -494,6 +494,8 @@ export type Database = {
       }
       goals: {
         Row: {
+          description: string | null
+          linked_account_id: string | null
           color: string
           created_at: string
           current_amount: number
@@ -514,6 +516,8 @@ export type Database = {
           icon?: string
           id?: string
           name: string
+          description?: string | null
+          linked_account_id?: string | null
           opening_amount?: number
           status?: string
           target_amount: number
@@ -528,6 +532,8 @@ export type Database = {
           icon?: string
           id?: string
           name?: string
+          description?: string | null
+          linked_account_id?: string | null
           opening_amount?: number
           status?: string
           target_amount?: number
@@ -867,6 +873,8 @@ export type Database = {
       }
       recurring_transactions: {
         Row: {
+          archived_at: string | null
+          notes: string | null
           account_id: string
           active: boolean
           amount: number
@@ -888,6 +896,8 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          archived_at?: string | null
+          notes?: string | null
           account_id: string
           active?: boolean
           amount: number
@@ -909,6 +919,8 @@ export type Database = {
           user_id?: string
         }
         Update: {
+          archived_at?: string | null
+          notes?: string | null
           account_id?: string
           active?: boolean
           amount?: number
@@ -1286,6 +1298,9 @@ export type Database = {
       }
     }
     Functions: {
+      search_finance_transactions: { Args: { filters?: Json }; Returns: Json }
+      finance_period_report: { Args: { date_from: string; date_to: string; account_filter?: string }; Returns: Json }
+      save_budget_details: { Args: { target_id: string | null; details: Json; category_ids: string[] }; Returns: string }
       archive_category_safely: {
         Args: { target_category_id: string }
         Returns: undefined

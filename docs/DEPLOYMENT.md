@@ -66,6 +66,79 @@ where id = 'receipts';
 
 Expected: all four migration columns exist; every listed table has RLS and forced RLS enabled; and `receipts` is private with the existing 10 MB image/PDF restrictions.
 
+### Production completeness: database queries and management
+
+Deploy `supabase/migrations/202609070001_complete_finance_management.sql` **before**
+deploying this frontend. It follows the six existing migrations and is forward-only.
+Do not edit or reapply old migrations, reset the database, or disable RLS.
+
+The migration adds goal description/account linkage, recurring archive/notes fields,
+owner-checked goal linkage, transaction indexes, and these caller-privilege RPCs:
+
+- `search_finance_transactions(jsonb)` — owner/date/account/category/type/source/
+  search/amount filters, stable ordering, then pagination (maximum 100 rows).
+- `finance_period_report(date,date,uuid)` — historical aggregates using the
+  profile timezone and an exclusive end date.
+- `save_budget_details(uuid,jsonb,uuid[])` — atomic budget and category-link editing.
+
+It grants only the authenticated operations needed by existing owner-only policies
+and adds managed entities to the Realtime publication if not already included.
+No auth trigger, existing RLS policy, financial history, or receipt policy is removed.
+An old database without this migration will display the actual query/schema error;
+the application must not substitute sample data.
+
+Release sequence from the already-linked repository:
+
+1. Take/confirm the usual database backup and review pending migration history:
+   `supabase migration list` and `supabase db push --dry-run`.
+2. Confirm the six earlier migrations are recorded and the new completeness
+   migration is the intended pending change. Resolve any unexpected drift first.
+3. Apply through your normal migration pipeline, or run `supabase db push` after
+   reviewing that dry-run. No migration was applied to your hosted project by this
+   implementation task.
+4. Install dependencies with `npm ci`, run `npm run check`, `npm run test:db`, and
+   `npm run test:e2e`, then deploy the frontend. OCR browser tests need access to
+   Tesseract's public worker/core/language downloads; receipt recognition is local.
+5. Sign in normally. Check historical transaction filtering/pagination, July/August/
+   September reports, editing a transaction's date, goal/contribution edits, budget
+   edits, recurring pause/resume/archive, and refresh persistence. Confirm a second
+   user cannot see any of the first user's rows or private receipt attachments.
+6. Verify cross-device Realtime, real iPhone PWA offline/reconnect, and the deployed
+   receipt/PDF OCR workflow. Embedded SQL tests do not replace this hosted smoke test.
+
+Read-only catalog verification:
+
+```sql
+select table_name, column_name
+from information_schema.columns
+where table_schema='public'
+  and ((table_name='goals' and column_name in ('description','linked_account_id'))
+    or (table_name='recurring_transactions' and column_name in ('notes','archived_at')));
+
+select p.proname, p.prosecdef as security_definer,
+  has_function_privilege('authenticated',p.oid,'execute') as authenticated_execute,
+  has_function_privilege('anon',p.oid,'execute') as anon_execute
+from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+where n.nspname='public' and p.proname in
+  ('search_finance_transactions','finance_period_report','save_budget_details');
+
+select c.relname, c.relrowsecurity, c.relforcerowsecurity
+from pg_class c join pg_namespace n on n.oid=c.relnamespace
+where n.nspname='public' and c.relname in
+  ('accounts','transactions','categories','budgets','goals','goal_contributions',
+   'bills','subscriptions','recurring_transactions','merchant_rules','attachments');
+```
+
+Expected: four added columns; all three RPCs are security invoker with authenticated
+execute and no anonymous execute; every listed table retains enabled, forced RLS.
+Do not run owner RPCs as anonymous SQL Editor calls to simulate authentication.
+
+The production CSP includes `wasm-unsafe-eval` for local OCR's WebAssembly, not
+general JavaScript eval. No new production environment variables or secrets are needed.
+
+See [Production completeness report](PRODUCTION_COMPLETENESS.md) for exact coverage
+and verification limitations.
+
 ## Google, Apple, and Microsoft sign-in
 
 Provider credentials belong in the provider console and **Supabase Dashboard → Authentication → Providers**. They are not application environment variables and must never be placed in frontend code or committed files.

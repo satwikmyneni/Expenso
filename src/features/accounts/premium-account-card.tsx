@@ -97,7 +97,7 @@ export function PremiumAccountCard({ account, balance, compact = false, onEdit, 
       <div className="flex min-w-0 items-center gap-2.5">
         <BankLogo brand={bankBrand} className="min-h-9 min-w-9 [&>svg]:size-6" />
         <div className="min-w-0">
-          <p data-testid="account-identity" className="truncate text-sm font-extrabold uppercase tracking-[-.035em]">{identityName}</p>
+          <Link href={`/transactions?accountId=${encodeURIComponent(account.id)}`} data-testid="account-identity" className="block min-h-9 truncate py-2 text-sm font-extrabold uppercase tracking-[-.035em]">{identityName}</Link>
           <p className="mt-1 text-[10px] font-semibold uppercase tracking-[.16em]" style={{ color: bankBrand.mutedTextColor }}>{accountTypeLabel[account.type]}</p>
         </div>
       </div>
