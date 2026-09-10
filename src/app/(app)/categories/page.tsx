@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Archive, Pencil, Plus } from "lucide-react";
+import { Trash2, Pencil, Plus } from "lucide-react";
 import { dateRange, transactionHref } from "@/features/transactions/query";
 import { usePeriodReport } from "@/features/finance/use-finance-query";
 import { MerchantRuleManager } from "@/features/imports/merchant-rule-manager";
@@ -20,7 +20,7 @@ import type { Category } from "@/features/finance/types";
 import { financeColors } from "@/lib/theme";
 
 export default function CategoriesPage() {
-  const { data, addCategory, updateCategory, archiveCategory } = useFinance();
+  const { data, addCategory, updateCategory, deleteCategory } = useFinance();
   const [open, setOpen] = useState(false);
   const [editing,setEditing]=useState<Category>();
   const [busy, setBusy] = useState(false);
@@ -47,14 +47,14 @@ export default function CategoriesPage() {
     }
   };
 
-  const archive = async (category: Category) => {
-    if (category.isDefault) return;
-    if (!window.confirm(`Archive ${category.name}? Existing transactions will move to Uncategorized; no financial history will be deleted.`)) return;
+  const remove = async (category: Category) => {
+    if (category.name.toLowerCase() === "uncategorized") return toast.error("Uncategorized is protected and cannot be deleted.");
+    if (!window.confirm(`Delete ${category.name} and its subcategories? Existing transactions will move to Uncategorized; no financial history will be deleted.`)) return;
     try {
-      await archiveCategory(category.id);
-      toast.success("Category archived; existing transactions moved to Uncategorized.");
+      await deleteCategory(category.id);
+      toast.success("Category deleted; existing transactions moved to Uncategorized.");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not archive category.");
+      toast.error(error instanceof Error ? error.message : "Could not delete category.");
     }
   };
 
@@ -76,7 +76,7 @@ export default function CategoriesPage() {
         <span className="grid size-11 shrink-0 place-items-center rounded-[14px]" style={{ backgroundColor: `${category.color}22`, color: category.color }}><CategoryIcon name={category.icon} className="size-5" /></span>
         <div className="min-w-0 flex-1"><Link className="block min-h-11 truncate py-3 text-sm font-semibold hover:text-info" href={transactionHref({category:category.id,...range})}>{category.name}</Link>{category.parentId && <p className="truncate text-xs text-muted">Under {data.categories.find((row)=>row.id===category.parentId)?.name}</p>}<p className="mt-1 text-[11px] capitalize text-muted-foreground">{category.kind} · {formatMoney(amount, data.profile.currency)}</p></div>
         {category.name.toLowerCase()!=="uncategorized" && <Button size="icon" variant="ghost" aria-label={`Edit ${category.name}`} onClick={()=>{setEditing(category);setForm({name:category.name,kind:category.kind,color:category.color,parentId:category.parentId ?? "",sortOrder:category.sortOrder ?? 0});setOpen(true);}}><Pencil className="size-4"/></Button>}
-        {!category.isDefault ? <Button size="icon" variant="ghost" aria-label={`Archive ${category.name}`} onClick={() => void archive(category)}><Archive className="size-4" /></Button> : null}
+        {category.name.toLowerCase() !== "uncategorized" ? <Button size="icon" variant="ghost" aria-label={`Delete ${category.name}`} onClick={() => void remove(category)}><Trash2 className="size-4" /></Button> : null}
       </CardContent></Card>; })}
     </div>
     {report.error && <p role="alert">{report.error}</p>}

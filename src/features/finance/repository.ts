@@ -119,6 +119,7 @@ function mapAccount(row: AccountRow, balance?: AccountBalanceRow): Account {
     includeInNetWorth: row.include_in_net_worth,
     includeInAnalytics: row.include_in_analytics,
     archived: row.archived_at !== null,
+    isActive: row.is_active ?? true,
     cardNetwork: row.card_network === "visa" || row.card_network === "mastercard" || row.card_network === "american_express" || row.card_network === "rupay" ? row.card_network : undefined,
     creditLimitMinor: optionalDecimalMinor(row.credit_limit),
     statementDay: row.statement_day ?? undefined,
@@ -294,8 +295,8 @@ export class FinanceRepository {
   async queryTransactions(query: TransactionQuery): Promise<TransactionPage> {
     const result = await this.client.rpc("search_finance_transactions", { filters: { ...query } as Json });
     if (result.error) throw dataError(result.error, "load");
-    const value = result.data as unknown as { total: number; rows: TransactionRow[] };
-    return { total: value.total, rows: value.rows.map(mapTransaction) };
+    const value = result.data as unknown as { total: number; rows: TransactionRow[]; daily_totals?: Record<string, string> };
+    return { total: value.total, rows: value.rows.map(mapTransaction), dailyTotals: Object.fromEntries(Object.entries(value.daily_totals ?? {}).map(([date, amount]) => [date, parseMoney(amount)])) };
   }
 
   async periodReport(start: string, end: string, account?: string) {
@@ -459,6 +460,12 @@ export class FinanceRepository {
     return mapAccount(result.data);
   }
 
+  async setAccountActive(userId: string, id: string, isActive: boolean) {
+    const result = await this.client.from("accounts").update({ is_active: isActive }).eq("id", id).eq("user_id", userId).select("*").single();
+    if (result.error) throw dataError(result.error);
+    return mapAccount(result.data);
+  }
+
   async deleteAccount(userId: string, id: string): Promise<void> {
     const result = await this.client.from("accounts").delete().eq("id", id).eq("user_id", userId);
     if (result.error?.code === "23503") throw new Error("This account has linked financial history and cannot be deleted.");
@@ -477,8 +484,8 @@ export class FinanceRepository {
     return mapCategory(result.data);
   }
 
-  async archiveCategory(id: string) {
-    const result = await this.client.rpc("archive_category_safely", { target_category_id: id });
+  async deleteCategory(id: string) {
+    const result = await this.client.rpc("delete_category_safely", { target_category_id: id });
     if (result.error) throw dataError(result.error, "delete");
   }
 
@@ -637,9 +644,9 @@ export class FinanceRepository {
     return mapGoal(result.data);
   }
 
-  async archiveGoal(userId: string, id: string) {
-    const result = await this.client.from("goals").update({ status: "archived" }).eq("id", id).eq("user_id", userId).select("id").single();
-    if (result.error) throw dataError(result.error);
+  async deleteGoal(_userId: string, id: string) {
+    const result = await this.client.rpc("delete_goal_safely", { target_goal_id: id });
+    if (result.error) throw dataError(result.error, "delete");
   }
 
   async receiptLinks(userId: string, transactionId: string) {

@@ -92,3 +92,17 @@ input:disabled, select:disabled, textarea:disabled { color: rgb(var(--muted-fore
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* Bound the document while allowing intentional filter rows to scroll inside it. */
+html, body { width: 100%; max-width: 100%; overflow-x: clip; overscroll-behavior-x: none; }
+body { min-height: 100dvh; }
+main, article, section { min-width: 0; }
+@media (max-width: 639px) {
+  input, select, textarea { font-size: 16px !important; }
+}
+/* Standalone financial workspace uses scroll gestures without pinch zoom. Browser zoom stays
+   available in normal tabs for accessibility; internal chip rows opt into pan-x. */
+@media (display-mode: standalone) {
+  body { touch-action: pan-x pan-y; }
+  .filter-chips { touch-action: pan-x pan-y; }
+}

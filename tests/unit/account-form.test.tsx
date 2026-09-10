@@ -1,5 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { accountBalance } from "@/features/finance/calculations";
+import { creditCardMetrics } from "@/features/accounts/account-semantics";
 import { AccountFormDialog } from "@/features/accounts/account-form-dialog";
 import type { Account } from "@/features/finance/types";
 
@@ -73,4 +75,34 @@ describe("account form", () => {
     expect(await screen.findByText("Original principal must be greater than zero.")).toBeVisible();
     expect(screen.getByText("Next payment date is required.")).toBeVisible();
   });
+
+
+it("edits 6000 outstanding to 3000 without adding existing purchases twice", async () => {
+  const card: Account = { ...account, type: "credit_card", openingBalanceMinor: 300000n, currentBalanceMinor: 600000n, creditLimitMinor: 1000000n, statementDay: 8, paymentDueDay: 25 };
+  const onSave = vi.fn().mockResolvedValue(undefined);
+  render(<AccountFormDialog open onClose={vi.fn()} account={card} currency="INR" onSave={onSave} />);
+  expect(screen.getByLabelText(/Current outstanding/)).toHaveValue("6000.00");
+  fireEvent.change(screen.getByLabelText(/Current outstanding/), { target: { value: "3000" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  await waitFor(() => expect(onSave).toHaveBeenCalled());
+  const draft = onSave.mock.calls[0][0];
+  expect(draft.openingBalanceMinor).toBe(0n);
+  const purchase = { id: "purchase", type: "expense" as const, amountMinor: 300000n, accountId: card.id, currency: "INR", date: "2026-09-10", merchant: "Purchase", tags: [], source: "manual" as const, createdAt: "", updatedAt: "" };
+  const saved = { ...card, ...draft, currentBalanceMinor: undefined };
+  expect(creditCardMetrics(saved, accountBalance(saved, [purchase]))).toMatchObject({ usedMinor: 300000n, availableMinor: 700000n });
+  const payment = { ...purchase, id: "payment", type: "transfer" as const, accountId: "bank", transferAccountId: card.id, amountMinor: 100000n };
+  expect(accountBalance(saved, [purchase, payment])).toBe(200000n);
+  expect(accountBalance(saved, [purchase, { ...purchase, id: "refund", type: "refund", amountMinor: 50000n }])).toBe(250000n);
+});
+
+it("preserves the ledger opening when saving an unchanged card outstanding", async () => {
+  const card: Account = { ...account, type: "credit_card", openingBalanceMinor: 100000n, currentBalanceMinor: 300000n, creditLimitMinor: 1000000n, statementDay: 8, paymentDueDay: 25 };
+  const onSave = vi.fn().mockResolvedValue(undefined);
+  render(<AccountFormDialog open onClose={vi.fn()} account={card} currency="INR" onSave={onSave} />);
+  expect(screen.getByLabelText(/Current outstanding/)).toHaveValue("3000.00");
+  fireEvent.change(screen.getByLabelText("Institution name"), { target: { value: "SBI" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ openingBalanceMinor: 100000n, institution: "SBI" })));
+});
+
 });

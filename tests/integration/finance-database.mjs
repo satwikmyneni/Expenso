@@ -29,13 +29,58 @@ try {
     // gen_random_uuid is built into PostgreSQL; pgcrypto itself is not bundled
     // in PGlite. No migration source file is changed for this compatibility step.
     const sql=(await readFile("supabase/migrations/"+file,"utf8")).replace(/create extension if not exists pgcrypto;/i,"");
-    await db.exec(sql);
+    if (file === "202609090001_safe_deletion_and_account_status.sql") {
+      await assert.rejects(db.query("lock table public.categories in access exclusive mode"), { code: "25P01" }); checks++;
+      const legacyOwner="10000000-0000-4000-8000-000000000003";
+      const missingOwner="10000000-0000-4000-8000-000000000004";
+      await db.query("insert into auth.users(id,email) values($1,'legacy@example.test'),($2,'missing@example.test')",[legacyOwner,missingOwner]);
+      // Synthetic pre-migration state: a missing fallback and a legacy duplicate
+      // under a parent (legal under the former per-parent unique index).
+      await db.exec("alter table public.categories disable trigger categories_protect_uncategorized");
+      await db.query("update public.categories set name='Legacy custom',is_default=false where user_id=$1 and name='Uncategorized'",[missingOwner]);
+      await db.exec("alter table public.categories enable trigger categories_protect_uncategorized");
+      const legacyParent=await scalar("insert into public.categories(user_id,name,kind) values($1,'Legacy parent','expense') returning id",[legacyOwner]);
+      const legacyDuplicate=await scalar("insert into public.categories(user_id,name,kind,parent_id,is_default) values($1,'Uncategorized','both',$2,true) returning id",[legacyOwner,legacyParent]);
+      const legacyAccount=await scalar("insert into public.accounts(user_id,name,type) values($1,'Legacy bank','bank') returning id",[legacyOwner]);
+      await db.query("insert into public.transactions(user_id,account_id,category_id,type,amount,occurred_at,merchant) values($1,$2,$3,'expense',123.45,'2025-03-14','Preserved migration history')",[legacyOwner,legacyAccount,legacyDuplicate]);
+      const historyBefore=(await db.query("select id,user_id,account_id,type,amount,occurred_at,merchant from public.transactions order by id")).rows;
+      const categoriesBefore=(await db.query("select * from public.categories order by id")).rows;
+      const failurePoint="alter table public.categories disable trigger categories_protect_uncategorized;";
+      assert.ok(sql.includes(failurePoint));
+      await assert.rejects(db.query(sql.replace(failurePoint,failurePoint+"\nraise exception 'Injected migration failure';")),/Injected migration failure/);checks++;
+      check(Number(await scalar("select count(*) from information_schema.columns where table_schema='public' and table_name='accounts' and column_name='is_active'"))===0,"failure rolls back earlier account DDL");
+      check(await scalar("select tgenabled from pg_trigger where tgrelid='public.categories'::regclass and tgname='categories_protect_uncategorized'")==='O',"failure restores category protection trigger");
+      assert.deepEqual((await db.query("select * from public.categories order by id")).rows,categoriesBefore);checks++;
+      const blockEnd=/end;\s*\$migration\$;/;
+      assert.ok(blockEnd.test(sql));
+      await assert.rejects(db.query(sql.replace(blockEnd,"raise exception 'Injected late failure';\nend;\n$migration$;")),/Injected late failure/);checks++;
+      assert.deepEqual((await db.query("select * from public.categories order by id")).rows,categoriesBefore);checks++;
+      check(Number(await scalar("select count(*) from information_schema.columns where table_schema='public' and table_name='accounts' and column_name='is_active'"))===0,"late failure rolls back entire migration");
+      check(await scalar("select to_regclass('public.categories_one_uncategorized')")===null,"late failure rolls back normalization index");
+      // A previous runner may already have committed the first account statement.
+      await db.exec("alter table public.accounts add column is_active boolean not null default true");
+      await db.query("update public.accounts set is_active=false where id=$1",[legacyAccount]);
+      // Extended protocol accepts exactly one statement and does not supply an
+      // enclosing transaction block as the old whole-file db.exec test did.
+      await db.query(sql);
+      check(Number(await scalar("select count(*) from public.categories where user_id=$1 and lower(name)='uncategorized' and is_default and archived_at is null and parent_id is null and kind='both'",[missingOwner]))===1,"migration creates a protected missing fallback");
+      check(Number(await scalar("select count(*) from public.categories where user_id=$1 and lower(name)='uncategorized'",[legacyOwner]))===1,"legacy duplicate fallback consolidated");
+      const fallback=await scalar("select id from public.categories where user_id=$1 and name='Uncategorized'",[legacyOwner]);
+      check(await scalar("select category_id from public.transactions where user_id=$1",[legacyOwner])===fallback,"duplicate fallback transactions reassigned");
+      await assert.rejects(db.query("insert into public.categories(user_id,name,kind,parent_id) values($1,'Uncategorized','both',$2)",[legacyOwner,legacyParent]),{code:'23505'});checks++;
+      check(Number(await scalar("select count(*) from public.categories where lower(name)='archived'"))===0,"normalization creates no Archived category");
+      await db.query(sql); // A retry also preserves data and status.
+      await db.transaction(async(tx)=>{await tx.query(sql);}); // Existing transaction wrapper is supported too.
+      check(await scalar("select is_active from public.accounts where id=$1",[legacyAccount])===false,"retry does not reactivate inactive accounts");
+      assert.deepEqual((await db.query("select id,user_id,account_id,type,amount,occurred_at,merchant from public.transactions order by id")).rows,historyBefore);checks++;
+      check(Number(await scalar("select count(*) from public.categories where user_id=$1 and name='Uncategorized'",[legacyOwner]))===1,"retry does not duplicate fallback");
+    } else await db.exec(sql);
   }
   await db.query("insert into auth.users(id,email) values($1,'owner-a@example.test'),($2,'owner-b@example.test')",[a,b]);
-  check(Number(await scalar("select count(*) from public.profiles"))===2,"both auth users bootstrap");
+  check(Number(await scalar("select count(*) from public.profiles"))===4,"new and existing auth users bootstrap");
   for(const table of ["notification_preferences","dashboard_preferences","ai_settings"])
-    check(Number(await scalar(`select count(*) from public.${table}`))===2,`auth bootstrap ${table}`);
-  check(Number(await scalar("select count(*) from public.categories where name='Uncategorized'"))===2,"protected fallback per user");
+    check(Number(await scalar(`select count(*) from public.${table}`))===4,`auth bootstrap ${table}`);
+  check(Number(await scalar("select count(*) from public.categories where name='Uncategorized'"))===4,"protected fallback per user");
   await asUser(a);
   await db.query("insert into public.accounts(id,name,type,institution) values($1,'Test savings','savings','Test Bank')",[accountA]);
   const categoryA=await scalar("select id from public.categories where name='Food & dining'");
@@ -101,6 +146,64 @@ try {
   check((await search({dateFrom:'2026-10-01',dateTo:'2026-10-02'})).total===1,"date filters use profile timezone exclusive end");
   check(Number((await report('2026-10-01','2026-11-01')).expenses)===7,"report and query timezone agree");
   check((await search({category:"uncategorized"})).total===4,"null category drilldown does not become an invalid UUID or all categories");
+
+  const fallback=await scalar("select id from public.categories where name='Uncategorized'");
+  await assert.rejects(db.query("select public.delete_category_safely($1)",[fallback]),/protected/);checks++;
+  await assert.rejects(db.query("update public.categories set kind='income' where id=$1",[fallback]),/protected/);checks++;
+  const emptyCategory=await scalar("insert into public.categories(name,kind) values('Empty removal','expense') returning id");
+  await scalar("select public.delete_category_safely($1)",[emptyCategory]);
+  check(Number(await scalar("select count(*) from public.categories where id=$1",[emptyCategory]))===0,"empty category deleted");
+  const parent=await scalar("insert into public.categories(name,kind) values('Delete parent','expense') returning id");
+  const child=await scalar("insert into public.categories(name,kind,parent_id) values('Delete child','expense',$1) returning id",[parent]);
+  await db.query("insert into public.categories(name,kind) values('Delete child','expense')");
+  const grandchild=await scalar("insert into public.categories(name,kind,parent_id) values('Delete grandchild','expense',$1) returning id",[child]);
+  for(const category of [parent,child,grandchild]) await db.query("insert into public.transactions(account_id,category_id,type,amount,occurred_at,merchant) values($1,$2,'expense',13,'2026-09-12','Preserved category transaction')",[accountA,category]);
+  const deleteRule=await scalar("insert into public.merchant_rules(pattern,merchant_normalized,category_id) values('DELETE RULE','DELETE RULE',$1) returning id",[child]);
+  await db.query("update public.bills set category_id=$1 where id=$2",[child,bill]);
+  await db.query("update public.recurring_transactions set category_id=$1 where id=$2",[grandchild,recurring]);
+  await db.query("insert into public.budget_categories(user_id,budget_id,category_id) values($1,$2,$3)",[a,budget,child]);
+  const beforeDeletion=await db.query("select id,amount,occurred_at,account_id,merchant,type from public.transactions order by id");
+  const totalsBefore=await report('2026-09-01','2026-10-01');
+  await scalar("select public.delete_category_safely($1)",[parent]);
+  check(Number(await scalar("select count(*) from public.categories where id=any($1::uuid[])",[[parent,child,grandchild]]))===0,"entire category subtree deleted");
+  check(Number(await scalar("select count(*) from public.transactions where merchant='Preserved category transaction' and category_id=$1",[fallback]))===3,"all descendant transactions reassigned");
+  assert.deepEqual((await db.query("select id,amount,occurred_at,account_id,merchant,type from public.transactions order by id")).rows,beforeDeletion.rows);checks++;
+  check((await report('2026-09-01','2026-10-01')).expenses===totalsBefore.expenses,"historical expenses survive category deletion");
+  check(Number(await scalar("select count(*) from public.merchant_rules where id=$1",[deleteRule]))===0,"referencing merchant rule removed");
+  check(await scalar("select category_id from public.bills where id=$1",[bill])===fallback,"bill category reassigned");
+  check(await scalar("select category_id from public.recurring_transactions where id=$1",[recurring])===fallback,"recurring category reassigned");
+  check(Number(await scalar("select count(*) from public.budget_categories where budget_id=$1 and category_id=$2",[budget,fallback]))===1,"budget fallback link retained");
+  check(Number(await scalar("select count(*) from public.categories where lower(name) like '%archived%'"))===0,"deletion creates no Archived category");
+  const managedGoal=await scalar("insert into public.goals(name,target_amount) values('Delete goal',100) returning id");
+  await db.query("update public.goals set name='Edited goal',target_date='2027-01-01',description='Edited description' where id=$1",[managedGoal]);
+  check(await scalar("select name from public.goals where id=$1",[managedGoal])==='Edited goal',"goal edit persists");
+  const managedContribution=await scalar("insert into public.goal_contributions(goal_id,source_account_id,linked_transaction_id,amount) values($1,$2,$3,100) returning id",[managedGoal,accountA,original]);
+  check(Number(await scalar("select current_amount from public.goals where id=$1",[managedGoal]))===100,"managedContribution reaches goal");
+  check(await scalar("select status from public.goals where id=$1",[managedGoal])==='completed',"reached goal completion status persists");
+  await db.query("update public.goal_contributions set amount=150 where id=$1",[managedContribution]);
+  check(Number(await scalar("select current_amount from public.goals where id=$1",[managedGoal]))===150,"edited managedContribution overfunds goal");
+  await db.query("delete from public.goal_contributions where id=$1",[managedContribution]);
+  check(Number(await scalar("select current_amount from public.goals where id=$1",[managedGoal]))===0,"deleting managedContribution recalculates progress");
+  check(await scalar("select status from public.goals where id=$1",[managedGoal])==='active',"removing contribution reopens goal");
+  await db.query("insert into public.goal_contributions(goal_id,source_account_id,linked_transaction_id,amount) values($1,$2,$3,80)",[managedGoal,accountA,original]);
+  await asUser(b);
+  await assert.rejects(db.query("select public.delete_goal_safely($1)",[managedGoal]),/not found/);checks++;
+  await assert.rejects(db.query("select public.delete_category_safely($1)",[categoryA]),/not found/);checks++;
+  check((await db.query("update public.accounts set is_active=false where id=$1 returning id",[accountA])).rows.length===0,"account status owner isolated");
+  await asUser(a);
+  await scalar("select public.delete_goal_safely($1)",[managedGoal]);
+  check(Number(await scalar("select count(*) from public.goals where id=$1",[managedGoal]))===0,"goal really deleted");
+  check(Number(await scalar("select count(*) from public.goal_contributions where goal_id=$1",[managedGoal]))===0,"goal allocations removed");
+  assert.deepEqual((await db.query("select id,amount,occurred_at,account_id,merchant,type from public.transactions order by id")).rows,beforeDeletion.rows);checks++;
+  await db.query("update public.accounts set is_active=false where id=$1",[accountA]);
+  check(await scalar("select is_active from public.accounts where id=$1",[accountA])===false,"inactive status persisted");
+  await assert.rejects(db.query("insert into public.transactions(account_id,type,amount) values($1,'expense',1)",[accountA]),/Reactivate/);checks++;
+  await db.query("update public.transactions set notes='Historical edit while inactive' where id=$1",[original]);
+  check((await search({account:accountA})).total>0,"inactive history query remains accessible");
+  await db.query("update public.accounts set is_active=true where id=$1",[accountA]);
+  check(await scalar("select is_active from public.accounts where id=$1",[accountA])===true,"reactivation persisted");
+  const dailyPage=await search({dateFrom:'2026-09-12',dateTo:'2026-09-13',pageSize:1});
+  check(Number(dailyPage.daily_totals['2026-09-12'])===-39,"daily total includes matching rows beyond current page");
   const receipt=await scalar("insert into storage.objects(bucket_id,name) values('receipts',$1) returning id",[a+"/receipts/synthetic.png"]);
   await asUser(b);
   check(Number(await scalar("select count(*) from storage.objects where id=$1",[receipt]))===0,"private receipt metadata isolated");

@@ -44,6 +44,14 @@ export function netWorth(accounts: Account[], transactions: FinanceTransaction[]
   }));
 }
 
+export function totalBalance(accounts: Account[], transactions: FinanceTransaction[]): bigint {
+  return sumMoney(accounts.filter((account) => !account.archived && (isCashAccountType(account.type) || account.type === "asset")).map((account) => accountBalance(account, transactions)));
+}
+
+export function liabilityTotal(accounts: Account[], transactions: FinanceTransaction[], type: "loan" | "credit_card"): bigint {
+  return sumMoney(accounts.filter((account) => !account.archived && account.type === type).map((account) => accountBalance(account, transactions)));
+}
+
 export function availableCash(accounts: Account[], transactions: FinanceTransaction[]): bigint {
   return sumMoney(accounts
     .filter((account) => !account.archived && isCashAccountType(account.type))

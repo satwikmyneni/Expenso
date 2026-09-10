@@ -33,6 +33,7 @@ interface FinanceContextValue {
   deleteTransaction: (id: string) => Promise<void>;
   addAccount: (account: AccountDraft) => Promise<void>;
   updateAccount: (id: string, account: AccountDraft) => Promise<void>;
+  setAccountActive: (id: string, active: boolean) => Promise<void>;
   deleteAccount: (id: string) => Promise<void>;
   archiveAccount: (id: string) => Promise<void>;
   loadAccountTransactions: (accountId: string) => Promise<FinanceTransaction[]>;
@@ -42,7 +43,7 @@ interface FinanceContextValue {
   receiptLinks: (transactionId: string) => Promise<Array<{id: string; name: string; url: string}>>;
   addCategory: (category: CategoryDraft) => Promise<void>;
   updateCategory: (id: string, category: CategoryDraft) => Promise<void>;
-  archiveCategory: (id: string) => Promise<void>;
+  deleteCategory: (id: string) => Promise<void>;
   loadImportCandidates: (accountId: string, startDate: string, endDate: string) => Promise<FinanceTransaction[]>;
   findImportByHash: (fileHash: string) => Promise<ImportHistoryItem | undefined>;
   createImport: (draft: ImportHistoryDraft) => Promise<ImportHistoryItem>;
@@ -56,7 +57,7 @@ interface FinanceContextValue {
   archiveBudget: (id: string) => Promise<void>;
   addGoal: (goal: Omit<Goal, "id">) => Promise<void>;
   updateGoal: (id: string, goal: Omit<Goal,"id">) => Promise<void>;
-  archiveGoal: (id: string) => Promise<void>;
+  deleteGoal: (id: string) => Promise<void>;
   addGoalContribution: (draft: GoalContributionDraft) => Promise<void>;
   updateGoalContribution: (id: string, draft: GoalContributionDraft) => Promise<void>;
   deleteGoalContribution: (id: string) => Promise<void>;
@@ -381,6 +382,7 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
   }, [client, data.demo, data.profile.id, load]);
 
   const addTransaction = useCallback(async (draft: TransactionDraft) => {
+    if (data.accounts.some((account) => account.isActive === false && (account.id === draft.accountId || account.id === draft.transferAccountId))) throw new Error("Reactivate the account before adding transactions.");
     if (repository && !data.demo && navigator.onLine) {
       setSyncStatus("syncing");
       try {
@@ -410,6 +412,7 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
 
   const addTransactions = useCallback(async (drafts: TransactionDraft[], onProgress?: (completed: number, total: number) => void) => {
     if (!drafts.length) return [];
+    if (drafts.some((draft) => data.accounts.some((account) => account.isActive === false && (account.id === draft.accountId || account.id === draft.transferAccountId)))) throw new Error("Reactivate the account before importing transactions.");
     if (repository && !data.demo) {
       if (!navigator.onLine) throw new Error("Connect to the internet before confirming a statement import. Your review remains on this device.");
       setSyncStatus("syncing");
@@ -469,6 +472,11 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     setData((current) => ({ ...current, accounts: current.accounts.map((item) => item.id === id ? { ...updated, currentBalanceMinor: item.currentBalanceMinor } : item) }));
     if (repository && !data.demo) await load();
   }, [data.accounts, data.demo, data.profile.id, load, repository]);
+
+  const setAccountActive = useCallback(async (id: string, active: boolean) => {
+    if (repository && !data.demo) await repository.setAccountActive(data.profile.id, id, active);
+    setData((current) => ({ ...current, accounts: current.accounts.map((account) => account.id === id ? { ...account, isActive: active } : account) }));
+  }, [data.demo, data.profile.id, repository]);
 
   const deleteAccount = useCallback(async (id: string) => {
     const blocker = loadedAccountDeleteBlocker(data, id);
@@ -542,19 +550,30 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     setData((current) => ({ ...current, categories: current.categories.map((row) => row.id === id ? updated : row) }));
   }, [data.categories, data.demo, data.profile.id, repository]);
 
-  const archiveCategory = useCallback(async (id: string) => {
-    if (repository && !data.demo) await repository.archiveCategory(id);
+  const deleteCategory = useCallback(async (id: string) => {
+    const target = data.categories.find((row) => row.id === id);
+    if (!target) throw new Error("Category unavailable.");
+    if (target.name.toLowerCase() === "uncategorized") throw new Error("Uncategorized is protected and cannot be deleted.");
+    if (repository && !data.demo) await repository.deleteCategory(id);
     setData((current) => {
-      const uncategorizedId = current.categories.find((category) => category.name.toLowerCase() === "uncategorized" && !category.archived)?.id;
-      return {
-        ...current,
-        categories: current.categories.map((category) => category.id === id ? { ...category, archived: true } : category),
-        transactions: uncategorizedId ? current.transactions.map((transaction) => transaction.categoryId === id ? { ...transaction, categoryId: uncategorizedId } : transaction) : current.transactions,
-        merchantRules: current.merchantRules.map((rule) => rule.categoryId === id ? { ...rule, categoryId: uncategorizedId, enabled: false } : rule),
+      const affected = new Set([id]);
+      let count = 0;
+      while (count !== affected.size) {
+        count = affected.size;
+        current.categories.forEach((row) => { if (row.parentId && affected.has(row.parentId)) affected.add(row.id); });
+      }
+      const fallback = current.categories.find((row) => row.name.toLowerCase() === "uncategorized") ?? { id: crypto.randomUUID(), name: "Uncategorized", kind: "both" as const, color: "#7b8794", icon: "CircleHelp" };
+      const categories = current.categories.filter((row) => !affected.has(row.id) && row.id !== fallback.id);
+      return { ...current,
+        categories: [...categories, { ...fallback, isDefault: true, archived: false, parentId: undefined }],
+        transactions: current.transactions.map((row) => row.categoryId && affected.has(row.categoryId) ? { ...row, categoryId: fallback.id } : row),
+        merchantRules: current.merchantRules.filter((row) => !row.categoryId || !affected.has(row.categoryId)),
+        recurring: current.recurring.map((row) => row.categoryId && affected.has(row.categoryId) ? { ...row, categoryId: fallback.id } : row),
+        budgets: current.budgets.map((row) => ({ ...row, categoryIds: [...new Set(row.categoryIds.map((category) => affected.has(category) ? fallback.id : category))] })),
       };
     });
     if (repository && !data.demo) await load();
-  }, [data.demo, load, repository]);
+  }, [data.categories, data.demo, load, repository]);
 
   const loadImportCandidates = useCallback(async (accountId: string, startDate: string, endDate: string) => {
     if (repository && !data.demo) return repository.loadImportCandidates(data.profile.id, accountId, startDate, endDate);
@@ -705,9 +724,9 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     setData((current) => ({ ...current, goals: current.goals.map((row) => row.id === id ? updated : row) }));
   }, [data.demo, data.profile.id, data.goals, repository]);
 
-  const archiveGoal = useCallback(async (id: string) => {
-    if (repository && !data.demo) await repository.archiveGoal(data.profile.id, id);
-    setData((current) => ({ ...current, goals: current.goals.filter((row) => row.id !== id) }));
+  const deleteGoal = useCallback(async (id: string) => {
+    if (repository && !data.demo) await repository.deleteGoal(data.profile.id, id);
+    setData((current) => ({ ...current, goals: current.goals.filter((row) => row.id !== id), goalContributions: current.goalContributions.filter((row) => row.goalId !== id) }));
   }, [data.demo, data.profile.id, repository]);
 
   const updateBudget = useCallback(async (id: string, budget: Omit<Budget,"id">) => {
@@ -725,7 +744,7 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     setData((current) => ({ ...current, recurring: item.status === "archived" ? current.recurring.filter((row) => row.id !== item.id || row.kind !== item.kind) : current.recurring.map((row) => row.id === item.id && row.kind === item.kind ? item : row) }));
   }, [data.demo, data.profile.id, repository]);
 
-  return <FinanceContext.Provider value={{ data, loading, syncStatus, connectionState, connectionError, reload: load, addTransaction, addTransactions, updateTransaction, deleteTransaction, addAccount, updateAccount, deleteAccount, archiveAccount, loadAccountTransactions, queryTransactions, exportTransactions, periodReport, receiptLinks, addCategory, updateCategory, archiveCategory, loadImportCandidates, findImportByHash, createImport, completeImport, saveMerchantRule, updateMerchantRule, deleteMerchantRule, uploadReceipt, addBudget, updateBudget, archiveBudget, addGoal, updateGoal, archiveGoal, addGoalContribution, updateGoalContribution, deleteGoalContribution, setPushNotifications, addRecurringItem, updateRecurringItem, updateProfile, resetDemo }}>{children}</FinanceContext.Provider>;
+  return <FinanceContext.Provider value={{ data, loading, syncStatus, connectionState, connectionError, reload: load, addTransaction, addTransactions, updateTransaction, deleteTransaction, addAccount, updateAccount, setAccountActive, deleteAccount, archiveAccount, loadAccountTransactions, queryTransactions, exportTransactions, periodReport, receiptLinks, addCategory, updateCategory, deleteCategory, loadImportCandidates, findImportByHash, createImport, completeImport, saveMerchantRule, updateMerchantRule, deleteMerchantRule, uploadReceipt, addBudget, updateBudget, archiveBudget, addGoal, updateGoal, deleteGoal, addGoalContribution, updateGoalContribution, deleteGoalContribution, setPushNotifications, addRecurringItem, updateRecurringItem, updateProfile, resetDemo }}>{children}</FinanceContext.Provider>;
 }
 
 export function useFinance() {

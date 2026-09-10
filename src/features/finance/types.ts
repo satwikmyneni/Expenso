@@ -28,6 +28,7 @@ export interface Account {
   includeInNetWorth: boolean;
   includeInAnalytics: boolean;
   archived: boolean;
+  isActive?: boolean;
   cardNetwork?: CardNetwork;
   creditLimitMinor?: bigint;
   statementDay?: number;

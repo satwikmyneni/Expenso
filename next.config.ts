@@ -14,7 +14,7 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   distDir: process.env.EXPENSO_NEXT_DIST_DIR ?? ".next",
   turbopack: { root: process.cwd() },
-  allowedDevOrigins: ["127.0.0.1"],
+  allowedDevOrigins: ["127.0.0.1", "172.20.10.4"],
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

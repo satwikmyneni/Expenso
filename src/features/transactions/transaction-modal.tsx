@@ -55,11 +55,11 @@ const types: Array<{ value: TransactionType; label: string; icon: typeof ArrowUp
 ];
 
 export function TransactionModal({ open, onClose, transaction, voicePrompt = false }: { open: boolean; onClose: () => void; transaction?: FinanceTransaction; voicePrompt?: boolean }) {
-  const { data, addTransaction, updateTransaction, receiptLinks } = useFinance();
+  const { data, addTransaction, updateTransaction, deleteTransaction, receiptLinks } = useFinance();
   const [receipts,setReceipts] = useState<Array<{id:string;name:string;url:string}>>([]);
   const [duplicateWarning, setDuplicateWarning] = useState<string>();
   const [listening, setListening] = useState(false);
-  const { register, handleSubmit, watch, setValue, reset, formState: { errors, isSubmitting } } = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { type: "expense", date: format(new Date(), "yyyy-MM-dd"), accountId: data.accounts[0]?.id, paymentMethod: "UPI" } });
+  const { register, handleSubmit, watch, setValue, reset, formState: { errors, isSubmitting } } = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { type: "expense", date: format(new Date(), "yyyy-MM-dd"), accountId: data.accounts.find((account) => !account.archived && account.isActive !== false)?.id, paymentMethod: "UPI" } });
   // React Hook Form deliberately exposes subscription-based values here.
   // eslint-disable-next-line react-hooks/incompatible-library
   const type = watch("type");
@@ -89,7 +89,7 @@ export function TransactionModal({ open, onClose, transaction, voicePrompt = fal
   }, [loanDestination, setValue]);
   useEffect(() => {
     if (!open) return;
-    reset(transaction ? { type:transaction.type, amount:minorToDecimal(transaction.amountMinor), accountId:transaction.accountId, transferAccountId:transaction.transferAccountId, categoryId:transaction.categoryId, date:transaction.date, merchant:transaction.merchant, notes:transaction.notes, paymentMethod:transaction.paymentMethod, refundOfId:transaction.refundOfId, loanPrincipal:transaction.loanPrincipalMinor === undefined ? undefined : minorToDecimal(transaction.loanPrincipalMinor), loanInterest:transaction.loanInterestMinor === undefined ? undefined : minorToDecimal(transaction.loanInterestMinor) } : { type:"expense", date:format(new Date(),"yyyy-MM-dd"), accountId:data.accounts[0]?.id, paymentMethod:"UPI", amount:"", merchant:"" });
+    reset(transaction ? { type:transaction.type, amount:minorToDecimal(transaction.amountMinor), accountId:transaction.accountId, transferAccountId:transaction.transferAccountId, categoryId:transaction.categoryId, date:transaction.date, merchant:transaction.merchant, notes:transaction.notes, paymentMethod:transaction.paymentMethod, refundOfId:transaction.refundOfId, loanPrincipal:transaction.loanPrincipalMinor === undefined ? undefined : minorToDecimal(transaction.loanPrincipalMinor), loanInterest:transaction.loanInterestMinor === undefined ? undefined : minorToDecimal(transaction.loanInterestMinor) } : { type:"expense", date:format(new Date(),"yyyy-MM-dd"), accountId:data.accounts.find((account) => !account.archived && account.isActive !== false)?.id, paymentMethod:"UPI", amount:"", merchant:"" });
     setDuplicateWarning(undefined);
     setValue("description",transaction?.description ?? "");
     setValue("reference",transaction?.reference ?? "");
@@ -131,8 +131,8 @@ export function TransactionModal({ open, onClose, transaction, voicePrompt = fal
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label={type === "income" ? "Source" : "Merchant / description"} error={errors.merchant?.message}><Input placeholder={type === "income" ? "e.g. Acme salary" : "e.g. Nature's Basket"} {...register("merchant")} /></Field>
         <Field label="Date" error={errors.date?.message}><Input type="date" {...register("date")} /></Field>
-        <Field label={type === "transfer" ? "From account" : "Account"} error={errors.accountId?.message}><Select {...register("accountId")}>{data.accounts.filter((account) => (!account.archived || account.id === transaction?.accountId)).map((account) => <option value={account.id} key={account.id}>{account.name}</option>)}</Select></Field>
-        {type === "transfer" ? <Field label="To account" error={errors.transferAccountId?.message}><Select {...register("transferAccountId")}><option value="">Choose destination</option>{data.accounts.filter((account) => !account.archived).map((account) => <option value={account.id} key={account.id}>{account.name}</option>)}</Select></Field> : <Field label="Category"><Select {...register("categoryId")}><option value="">Uncategorized</option>{data.categories.filter((category) => !category.archived && (category.kind === (type === "refund" ? "expense" : type) || category.kind === "both")).map((category) => <option value={category.id} key={category.id}>{category.name}</option>)}</Select></Field>}
+        <Field label={type === "transfer" ? "From account" : "Account"} error={errors.accountId?.message}><Select {...register("accountId")}>{data.accounts.filter((account) => ((!account.archived && account.isActive !== false) || account.id === transaction?.accountId)).map((account) => <option value={account.id} key={account.id}>{account.name}</option>)}</Select></Field>
+        {type === "transfer" ? <Field label="To account" error={errors.transferAccountId?.message}><Select {...register("transferAccountId")}><option value="">Choose destination</option>{data.accounts.filter((account) => (!account.archived && account.isActive !== false) || account.id === transaction?.transferAccountId).map((account) => <option value={account.id} key={account.id}>{account.name}</option>)}</Select></Field> : <Field label="Category"><Select {...register("categoryId")}><option value="">Uncategorized</option>{data.categories.filter((category) => !category.archived && (category.kind === (type === "refund" ? "expense" : type) || category.kind === "both")).map((category) => <option value={category.id} key={category.id}>{category.name}</option>)}</Select></Field>}
         {type === "refund" && open && <PurchaseSelector value={refundOfId} accountId={accountId} error={errors.refundOfId?.message} onChange={(purchase)=>{setValue("refundOfId",purchase?.id);if(purchase){setValue("accountId",purchase.accountId);setValue("categoryId",purchase.categoryId);}}}/>}
         <Field label="Payment method"><Select {...register("paymentMethod")}><option>UPI</option><option>Credit card</option><option>Debit card</option><option>Cash</option><option>Bank transfer</option><option>Other</option></Select></Field>
       </div>
@@ -140,6 +140,7 @@ export function TransactionModal({ open, onClose, transaction, voicePrompt = fal
       <Field label="Original description"><Textarea {...register("description")} /></Field>
       <Field label="Reference / UTR"><Input {...register("reference")} /></Field>
       {transaction && <div><Button type="button" variant="secondary" onClick={() => void receiptLinks(transaction.id).then((links) => { setReceipts(links); if (!links.length) toast.info("No receipt attached to this transaction."); }).catch((error) => toast.error(error.message))}>View attachments</Button>{receipts.map((receipt) => <a key={receipt.id} href={receipt.url} target="_blank" rel="noopener noreferrer" className="mt-2 block break-all text-sm text-info underline">{receipt.name}</a>)}</div>}
+      {transaction && <Button type="button" variant="danger" onClick={() => { if (window.confirm("Delete this transaction? Balances and historical reports will update.")) void deleteTransaction(transaction.id).then(() => { toast.success("Transaction deleted"); onClose(); }).catch((error) => toast.error(error.message)); }}>Delete transaction</Button>}
       <Field label="Notes"><Textarea placeholder="Optional context" {...register("notes")} /></Field>
       {duplicateWarning && <div className="rounded-2xl border border-warning/35 bg-warning/10 p-4 text-sm font-semibold text-foreground"><Sparkles className="mr-2 inline size-4 text-warning" />{duplicateWarning}</div>}
       <div className="flex flex-col-reverse gap-2 border-t pt-5 sm:flex-row sm:justify-between">

@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { AccountFormDialog } from "@/features/accounts/account-form-dialog";
 import { ManagedAccountCard } from "@/features/accounts/managed-account-card";
-import { accountBalance, netWorth } from "@/features/finance/calculations";
+import { accountBalance, netWorth, totalBalance } from "@/features/finance/calculations";
 import { useFinance } from "@/features/finance/finance-provider";
 import { formatMoney } from "@/features/finance/money";
 import type { AccountDraft } from "@/features/finance/types";
@@ -43,9 +43,10 @@ function AccountsContent() {
         <span className="grid size-14 place-items-center rounded-2xl border border-white/10 bg-white/[.04]"><WalletCards className="size-6 text-info" /></span>
       </CardContent>
     </Card>
-    <div className="grid gap-5 md:grid-cols-2 2xl:grid-cols-3">
-      {data.accounts.filter((account) => !account.archived).map((account) => <ManagedAccountCard key={`${account.id}-${params.get("manage") === account.id}`} initiallyEditing={params.get("manage") === account.id} account={account} balance={accountBalance(account, data.transactions)} />)}
-    </div>
+    <p className="mb-6 text-lg font-semibold">Total balance: {formatMoney(totalBalance(data.accounts,data.transactions),data.profile.currency)}</p>
+    {([{id:"assets",title:"Asset accounts",matches:(type:string)=>!["loan","credit_card","liability"].includes(type)}, {id:"loans",title:"Loans",matches:(type:string)=>type==="loan"}, {id:"credit-cards",title:"Credit cards",matches:(type:string)=>type==="credit_card"}, {id:"other-liabilities",title:"Other liabilities",matches:(type:string)=>type==="liability"}]).map((section)=><section key={section.id} id={section.id} className="mb-7 scroll-mt-24"><h2 className="mb-4 text-xl font-semibold">{section.title}</h2><div className="grid gap-5 md:grid-cols-2 2xl:grid-cols-3">
+      {data.accounts.filter((account) => !account.archived && section.matches(account.type)).map((account) => <ManagedAccountCard key={`${account.id}-${params.get("manage") === account.id}`} initiallyEditing={params.get("manage") === account.id} account={account} balance={accountBalance(account, data.transactions)} />)}
+    </div>{!data.accounts.some((account)=>!account.archived && section.matches(account.type)) && <p className="text-sm text-muted-foreground">No {section.title.toLowerCase()} yet.</p>}</section>)}
     <AccountFormDialog open={open} onClose={() => setOpen(false)} accounts={data.accounts} currency={data.profile.currency} onSave={create} />
   </>;
 }

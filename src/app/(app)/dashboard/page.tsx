@@ -6,9 +6,9 @@ import { ArrowRight, CalendarClock, Target } from "lucide-react";
 import { addMonths, startOfMonth, subMonths } from "date-fns";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useFinance } from "@/features/finance/finance-provider";
-import { accountBalance, availableCash, getPrimaryDashboardAccount, netWorth } from "@/features/finance/calculations";
+import { accountBalance, availableCash, getPrimaryDashboardAccount, netWorth, totalBalance, liabilityTotal } from "@/features/finance/calculations";
 import { formatMoney, percentage } from "@/features/finance/money";
-import { BalanceTrendChart } from "@/features/dashboard/cashflow-chart";
+import { CashflowChart } from "@/features/dashboard/cashflow-chart";
 import { resolveGreetingName, resolveTimeGreeting } from "@/features/dashboard/greeting";
 import { SpendingRing } from "@/features/dashboard/spending-ring";
 import { TransactionRow } from "@/features/transactions/transaction-row";
@@ -41,6 +41,7 @@ export default function DashboardPage() {
   const progressFor=(budget:typeof data.budgets[number])=>{const report=budget.period==="yearly"?yearlyReport.result:budget.period==="weekly"?weeklyReport.result:monthReport.result;const spentMinor=report?.budgets.find((row)=>row.id===budget.id)?.spent ?? 0n;return {spentMinor,percent:percentage(spentMinor,budget.limitMinor)};};
   const summary=monthReport.result ?? {income:0n,expenses:0n};
   const groups=(monthReport.result?.categories ?? []).map((row)=>({categoryId:row.id,amountMinor:row.amount}));
+  const balance = totalBalance(data.accounts, data.transactions);
   const worth = netWorth(data.accounts, data.transactions);
   const cash = availableCash(data.accounts, data.transactions);
   const topCategory = groups[0];
@@ -70,8 +71,8 @@ export default function DashboardPage() {
           <CardHeader className="flex-col gap-5 pb-0 sm:flex-row sm:items-start">
             <div>
               <Link href="/accounts" className="eyebrow mb-2 inline-block py-2 hover:text-info"><span>Total balance</span> <span aria-hidden="true">↗</span></Link>
-              <p className="amount text-[2.35rem] font-semibold leading-none tracking-[-.055em] sm:text-[3.2rem]">{formatMoney(worth, data.profile.currency)}</p>
-              <p className="mt-3 text-xs text-income">Recorded income minus spending across included accounts</p>
+              <p className="amount text-[2.35rem] font-semibold leading-none tracking-[-.055em] sm:text-[3.2rem]">{formatMoney(balance, data.profile.currency)}</p>
+              <p className="mt-3 text-xs text-income">Money available in bank, cash, wallet and asset accounts</p>
             </div>
             <div className="flex rounded-full border border-border bg-background/50 p-1" aria-label="Balance chart period">
               {periods.map((period) => <button
@@ -84,8 +85,8 @@ export default function DashboardPage() {
             </div>
           </CardHeader>
           <CardContent className="pb-0">
-            <Link href="/insights" className="mb-3 inline-flex min-h-11 items-center text-sm text-info underline">Explore historical insights</Link><BalanceTrendChart transactions={data.transactions} currency={data.profile.currency} currentBalance={worth} months={months} reportTrend={chartReport.result?trendMonths(chartReport.result,now,months):[]} />
-            <div className="mb-4 flex justify-end text-[10px] font-semibold text-muted-foreground"><span className="mr-2 mt-0.5 size-2.5 rounded-sm bg-income" aria-hidden="true" />Actual balance</div>
+            <Link href="/insights" className="mb-3 inline-flex min-h-11 items-center text-sm text-info underline">Explore historical insights</Link><CashflowChart transactions={data.transactions} currency={data.profile.currency} reportTrend={chartReport.result?trendMonths(chartReport.result,now,months):[]} />
+            <div className="mb-4 flex justify-end text-[10px] font-semibold text-muted-foreground"><span className="mr-2 mt-0.5 size-2.5 rounded-sm bg-income" aria-hidden="true" />Income and spending</div>
           </CardContent>
           <div className="grid border-t border-border sm:grid-cols-3">
             <BalanceMetric href="/accounts" label="Available cash" value={formatMoney(cash, data.profile.currency)} />
@@ -136,6 +137,11 @@ export default function DashboardPage() {
       </aside>
     </section>
 
+    <section className="mt-5 grid gap-3 sm:grid-cols-3" aria-label="Financial overview">
+      <BalanceMetric href="/accounts#loans" label="Loans" value={formatMoney(liabilityTotal(data.accounts,data.transactions,"loan"),data.profile.currency)} />
+      <BalanceMetric href="/accounts#credit-cards" label="Credit cards" value={formatMoney(liabilityTotal(data.accounts,data.transactions,"credit_card"),data.profile.currency)} />
+      <BalanceMetric href="/accounts" label="Net worth" value={formatMoney(worth,data.profile.currency)} />
+    </section>
     <section className="mt-5 grid gap-5 md:grid-cols-2">
       <Card>
         <CardHeader><div><p className="eyebrow mb-2">Your plan</p><CardTitle>Budget pulse</CardTitle><Link href="/budgets" className="mt-2 inline-block py-2 text-xs text-info">View all budgets</Link></div><span className="status-pill bg-secondary text-secondary-foreground">{budgetUsed}% used</span></CardHeader>
@@ -143,7 +149,7 @@ export default function DashboardPage() {
       </Card>
       <Card>
         <CardHeader><div><p className="eyebrow mb-2">Building toward</p><CardTitle>Savings goals</CardTitle><Link href="/goals" className="mt-2 inline-block py-2 text-xs text-info">View all goals</Link></div><Target className="size-5 text-info" /></CardHeader>
-        <CardContent className="grid gap-3 sm:grid-cols-2">{data.goals.slice(0, 2).map((goal) => <Link href={`/goals#goal-${goal.id}`} className="rounded-2xl border border-border bg-elevated/55 p-4" key={goal.id}><p className="text-sm font-semibold">{goal.name}</p><p className="amount mt-1 text-xs text-muted-foreground">{formatMoney(goal.currentMinor, data.profile.currency)} of {formatMoney(goal.targetMinor, data.profile.currency)}</p><div className="mt-4 h-1.5 overflow-hidden rounded-full bg-muted-surface"><div className="h-full rounded-full bg-brand" style={{ width: `${percentage(goal.currentMinor, goal.targetMinor)}%` }} /></div></Link>)}</CardContent>
+        <CardContent className="grid gap-3 sm:grid-cols-2">{data.goals.slice(0, 2).map((goal) => <Link href={`/goals#goal-${goal.id}`} className="rounded-2xl border border-border bg-elevated/55 p-4" key={goal.id}><p className="text-sm font-semibold">{goal.name}</p><p className="amount mt-1 text-xs text-muted-foreground">{formatMoney(goal.currentMinor, data.profile.currency)} of {formatMoney(goal.targetMinor, data.profile.currency)}</p><div className="mt-4 h-1.5 overflow-hidden rounded-full bg-muted-surface"><div className="h-full rounded-full bg-brand" style={{ width: `${Math.min(100, percentage(goal.currentMinor, goal.targetMinor))}%` }} /></div></Link>)}</CardContent>
       </Card>
     </section>
   </>;

@@ -57,3 +57,11 @@ describe("historical reporting",()=>{
     expect(sampleReport(rows,[],"2026-08-01","2026-09-01").expenses).toBe(46000n);
   });
 });
+
+it("daily totals span pages and exclude transfer principal",()=>{
+  const rows=[row("one","2026-09-01",18800n),row("two","2026-09-01",7600n),{...row("transfer","2026-09-01",100000n),type:"transfer" as const,loanInterestMinor:1000n}];
+  const page=querySampleTransactions(rows,{pageSize:1});
+  expect(page.rows).toHaveLength(1);
+  expect(page.dailyTotals?.["2026-09-01"]).toBe(-27400n);
+  expect(querySampleTransactions(rows,{type:"expense",pageSize:1}).dailyTotals?.["2026-09-01"]).toBe(-26400n);
+});

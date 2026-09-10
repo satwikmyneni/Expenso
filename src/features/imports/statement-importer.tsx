@@ -33,7 +33,7 @@ export function StatementImporter() {
   const [file, setFile] = useState<File>();
   const [fileHash, setFileHash] = useState("");
   const [previousImport, setPreviousImport] = useState<ImportHistoryItem>();
-  const [accountId, setAccountId] = useState(data.accounts.find((account) => !account.archived)?.id ?? "");
+  const [accountId, setAccountId] = useState(data.accounts.find((account) => !account.archived && account.isActive !== false)?.id ?? "");
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState({ value: 0, message: "" });
   const [search, setSearch] = useState("");
@@ -41,7 +41,7 @@ export function StatementImporter() {
   const [sort, setSort] = useState<"date-desc" | "date-asc" | "amount-desc" | "merchant">("date-asc");
   const [bulkCategory, setBulkCategory] = useState("");
   const [page, setPage] = useState(0);
-  const activeAccounts = data.accounts.filter((account) => !account.archived);
+  const activeAccounts = data.accounts.filter((account) => !account.archived && account.isActive !== false);
   const activeCategories = data.categories.filter((category) => !category.archived);
   const selectedAccount = activeAccounts.find((account) => account.id === accountId);
 

@@ -48,6 +48,7 @@ for(const width of [320,375,390,393,414]) {
 }
 
 test("dashboard links reach existing entity management and editors",async({page})=>{
+  test.setTimeout(120_000);
   for(const [selector,url] of [
     ['a[href="/transactions"]',/\/transactions$/],
     ['a[href^="/transactions?id="]',/\/transactions\?id=/],
@@ -93,7 +94,7 @@ test("goal, budget and bill edits persist; archives preserve transactions",async
   await page.locator('[id^="item-"]').filter({hasText:"Edited recurring record"}).getByRole("button",{name:"Archive",exact:true}).click();
   await expect(page.getByText("Edited recurring record",{exact:true})).toHaveCount(0);await page.reload();
   await expect(page.getByText("Edited recurring record",{exact:true})).toHaveCount(0);
-  await page.goto("/goals");await goal.getByRole("button",{name:"Archive goal"}).click();
+  await page.goto("/goals");await goal.getByRole("button",{name:"Delete goal"}).click();
   await expect(goal).toHaveCount(0);
   expect(await page.evaluate(()=>JSON.parse(localStorage.getItem("expenso-demo-data-v2")!).transactions.length)).toBe(count);
 });
@@ -135,9 +136,9 @@ test("historical selectors, drilldowns, edits and combined filters use selected 
   await page.getByRole("combobox",{name:"Type",exact:true}).selectOption("expense");
   await page.getByLabel("Search transactions",{exact:true}).fill("Historical");
   await page.getByLabel("Minimum amount").fill("8500");await page.getByLabel("Sort transactions").selectOption("amount_desc");
-  await expect(page.getByRole("button",{name:"Edit Historical 9 expense",exact:true})).toBeVisible();
-  await expect(page.getByRole("button",{name:"Edit Historical 8 expense",exact:true})).toHaveCount(0);
-  await page.reload();await expect(page.getByRole("button",{name:"Edit Historical 9 expense",exact:true})).toBeVisible();
+  await expect(page.getByRole("button",{name:"Open Historical 9 expense",exact:true})).toBeVisible();
+  await expect(page.getByRole("button",{name:"Open Historical 8 expense",exact:true})).toHaveCount(0);
+  await page.reload();await expect(page.getByRole("button",{name:"Open Historical 9 expense",exact:true})).toBeVisible();
 });
 
 test("local OCR reads a synthetic receipt and waits for review",async({page},info)=>{

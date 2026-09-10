@@ -82,7 +82,7 @@ function OpenAccountFormDialog({
       <Field label="Account type" error={errors.type}>
         <Select value={form.type} onChange={(event) => update("type", event.target.value as AccountFormValues["type"])}>{accountTypeOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</Select>
       </Field>
-      <Field label={liability ? "Current outstanding" : "Opening balance"} error={errors.opening} hint={liability ? "This is the amount currently owed, not available cash." : "The balance before your first Expenso transaction."}>
+      <Field label={liability ? "Current outstanding" : "Opening balance"} error={errors.opening} hint={liability ? (account ? "Total currently owed, including recorded purchases and payments. This is not just the statement amount due." : "Amount owed before the transactions you will record in Expenso. Do not include purchases you will add separately.") : "The balance before your first Expenso transaction."}>
         <Input required aria-invalid={Boolean(errors.opening)} inputMode="decimal" value={form.opening} onChange={(event) => update("opening", event.target.value)} />
       </Field>
       {form.type === "credit_card" && <div className="grid gap-4 rounded-2xl border border-border bg-canvas/45 p-4 sm:grid-cols-2">

@@ -11,7 +11,7 @@ export interface TransactionQuery {
   search?: string; dateFrom?: string; dateTo?: string; minAmount?: string; maxAmount?: string;
   sort?: TransactionSort; page?: number; pageSize?: number;
 }
-export interface TransactionPage { rows: FinanceTransaction[]; total: number; cached?: boolean }
+export interface TransactionPage { rows: FinanceTransaction[]; total: number; cached?: boolean; dailyTotals?: Record<string, bigint> }
 export const dateOnly = (date: Date) => format(date, "yyyy-MM-dd");
 export const validDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(new Date(`${value}T12:00:00`).getTime()) && dateOnly(new Date(`${value}T12:00:00`)) === value;
 
@@ -70,5 +70,10 @@ export function querySampleTransactions(transactions: FinanceTransaction[], quer
   ).sort((a, b) => compareTransactions(a, b, query.sort));
   const size = Math.min(Math.max(query.pageSize ?? 25, 1), 100);
   const offset = Math.max(query.page ?? 0, 0) * size;
-  return { total: matches.length, rows: matches.slice(offset, offset + size) };
+  const dailyTotals: Record<string, bigint> = {};
+  for (const row of matches) {
+    const net = row.type === "income" || row.type === "refund" ? row.amountMinor : row.type === "expense" ? -row.amountMinor : row.type === "transfer" ? -(row.loanInterestMinor ?? 0n) : 0n;
+    dailyTotals[row.date] = (dailyTotals[row.date] ?? 0n) + net;
+  }
+  return { total: matches.length, rows: matches.slice(offset, offset + size), dailyTotals };
 }

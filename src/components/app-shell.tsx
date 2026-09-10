@@ -138,10 +138,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </header>
       {connectionState === "cached" && <div className="border-b border-warning/25 bg-warning/10 px-4 py-2.5 text-center text-xs font-semibold text-warning" role="status">{connectionError}</div>}
-      <main className="mx-auto min-w-0 w-full max-w-[1660px] px-4 pb-28 pt-7 sm:px-7 lg:px-8 lg:pb-12 lg:pt-8 xl:px-10">{children}</main>
+      <main className="mx-auto min-w-0 w-full max-w-[1660px] px-4 pb-[calc(7rem+env(safe-area-inset-bottom))] pt-7 sm:px-7 lg:px-8 lg:pb-12 lg:pt-8 xl:px-10">{children}</main>
     </div>
 
-    <nav className="fixed inset-x-0 bottom-0 z-40 grid h-[76px] grid-cols-5 border-t border-border bg-primary/95 px-2 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl lg:hidden" aria-label="Mobile navigation">
+    <nav className="fixed inset-x-0 bottom-0 z-40 grid h-[calc(76px+env(safe-area-inset-bottom))] grid-cols-5 border-t border-border bg-primary/95 px-2 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl lg:hidden" aria-label="Mobile navigation">
       {mobile.map((item) => {
         const active = pathname === item.href || (item.href !== "/dashboard" && pathname.startsWith(item.href));
         if (item.href === "#add") return <button key={item.href} onClick={() => setEntryOpen(true)} className="relative flex min-h-11 flex-col items-center justify-end gap-1 pb-2 text-[10px] font-bold text-info" aria-label="Add transaction"><span className="absolute -top-5 grid size-14 place-items-center rounded-full border-[5px] border-background bg-brand text-white shadow-float"><Plus className="size-6" /></span><span>Add</span></button>;

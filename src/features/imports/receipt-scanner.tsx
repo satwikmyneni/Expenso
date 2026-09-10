@@ -25,7 +25,7 @@ export function ReceiptScanner() {
   const fileInput = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File>();
   const [extraction, setExtraction] = useState<ReceiptExtraction>(emptyExtraction);
-  const [accountId, setAccountId] = useState(data.accounts.find((account) => !account.archived && isAssetAccountType(account.type))?.id ?? data.accounts.find((account) => !account.archived)?.id ?? "");
+  const [accountId, setAccountId] = useState(data.accounts.find((account) => !account.archived && account.isActive !== false && isAssetAccountType(account.type))?.id ?? data.accounts.find((account) => !account.archived && account.isActive !== false)?.id ?? "");
   const [categoryId, setCategoryId] = useState("");
   const [transferAccountId, setTransferAccountId] = useState("");
   const [refundOfId, setRefundOfId] = useState("");
@@ -36,7 +36,7 @@ export function ReceiptScanner() {
   const [progress, setProgress] = useState({ value: 0, message: "" });
   const [busy, setBusy] = useState(false);
   const [pendingAttachmentTransactionId, setPendingAttachmentTransactionId] = useState<string>();
-  const activeAccounts = data.accounts.filter((account) => !account.archived);
+  const activeAccounts = data.accounts.filter((account) => !account.archived && account.isActive !== false);
   const categories = data.categories.filter((category) => !category.archived && (category.kind === "both" || category.kind === (extraction.type === "income" ? "income" : "expense")));
   const purchases = useMemo(() => data.transactions.filter((transaction) => transaction.type === "expense" && transaction.accountId === accountId), [accountId, data.transactions]);
 

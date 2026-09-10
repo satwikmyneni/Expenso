@@ -31,7 +31,7 @@ export function BalanceTrendChart({ transactions, currency, currentBalance, mont
 
 export function CashflowChart({ transactions, currency, reportTrend }: { transactions: FinanceTransaction[]; currency: string; reportTrend?: ReturnType<typeof monthlyTrend> }) {
   const data = (reportTrend ?? monthlyTrend(transactions)).map((item) => ({ month: item.month, income: Number(item.incomeMinor) / 100, spending: Number(item.expenseMinor) / 100 }));
-  return <div className="h-[245px] w-full" aria-label="Income and spending chart">
+  return <div className="cashflow-chart h-[245px] w-full" aria-label="Income and spending chart">
     <ResponsiveContainer width="100%" height="100%">
       <AreaChart data={data} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}>
         <defs>

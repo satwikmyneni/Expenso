@@ -62,10 +62,11 @@ interface PremiumAccountCardProps {
   compact?: boolean;
   onEdit?: () => void;
   onDelete?: () => void;
+  onToggleActive?: () => void;
   lastPayment?: { date: string; amountMinor: bigint };
 }
 
-export function PremiumAccountCard({ account, balance, compact = false, onEdit, onDelete, lastPayment }: PremiumAccountCardProps) {
+export function PremiumAccountCard({ account, balance, compact = false, onEdit, onDelete, onToggleActive, lastPayment }: PremiumAccountCardProps) {
   const liability = ["credit_card", "loan", "liability"].includes(account.type);
   const visual = resolveAccountVisual(account);
   const { bankBrand } = visual;
@@ -75,7 +76,7 @@ export function PremiumAccountCard({ account, balance, compact = false, onEdit, 
   const identityName = bankBrand.key === "default" ? institutionName || account.name : bankBrand.displayName;
   const metadataTitle = institutionName || account.name;
   const metadataSubtitle = account.name === metadataTitle ? "Personal" : account.name;
-  const status = account.liabilityStatus ?? "active";
+  const status = account.isActive === false ? "inactive" : "active";
   const card = account.type === "credit_card" ? creditCardMetrics(account, balance) : null;
   const loan = account.type === "loan" ? loanMetrics(account, balance) : null;
   const dueDate = accountDueDate(account);
@@ -134,7 +135,7 @@ export function PremiumAccountCard({ account, balance, compact = false, onEdit, 
       </div>
       <div className="flex shrink-0 items-center gap-1" style={{ color: bankBrand.mutedTextColor }}>
         {visual.cardNetwork && <span className="mr-1 text-[10px] font-semibold tracking-normal">{visual.cardNetwork}</span>}
-        <AccountCardActions account={account} onEdit={onEdit} onDelete={onDelete} />
+        <AccountCardActions account={account} onEdit={onEdit} onDelete={onDelete} onToggleActive={onToggleActive} />
         <Link
           href={`/transactions?accountId=${encodeURIComponent(account.id)}`}
           className="grid size-11 place-items-center rounded-full transition hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
@@ -147,7 +148,7 @@ export function PremiumAccountCard({ account, balance, compact = false, onEdit, 
   </article>;
 }
 
-function AccountCardActions({ account, onEdit, onDelete }: { account: Account; onEdit?: () => void; onDelete?: () => void }) {
+function AccountCardActions({ account, onEdit, onDelete, onToggleActive }: { account: Account; onEdit?: () => void; onDelete?: () => void; onToggleActive?: () => void }) {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -184,6 +185,7 @@ function AccountCardActions({ account, onEdit, onDelete }: { account: Account; o
       <button type="button" className="fixed inset-0 z-40 hidden cursor-default sm:block" onClick={() => setOpen(false)} aria-label="Close account menu" />
       <div className="absolute bottom-12 right-0 z-50 hidden w-48 overflow-hidden rounded-2xl border border-border bg-elevated p-1.5 text-foreground shadow-float sm:grid" role="menu" aria-label={`Manage ${account.name}`}>
         <button type="button" role="menuitem" onClick={() => choose(onEdit)} className="flex min-h-11 items-center gap-3 rounded-xl px-3 text-left text-sm font-semibold hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"><Pencil className="size-4" aria-hidden="true" />Edit account</button>
+        {onToggleActive && <button type="button" role="menuitem" onClick={() => choose(onToggleActive)} className="flex min-h-12 w-full items-center rounded-xl px-3 text-left text-sm font-semibold hover:bg-secondary">Mark as {account.isActive === false ? "Active" : "Inactive"}</button>}
         <button type="button" role="menuitem" onClick={() => choose(onDelete)} className="flex min-h-11 items-center gap-3 rounded-xl px-3 text-left text-sm font-semibold text-destructive hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/30"><Trash2 className="size-4" aria-hidden="true" />Delete account</button>
       </div>
 
@@ -192,7 +194,8 @@ function AccountCardActions({ account, onEdit, onDelete }: { account: Account; o
           <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-muted-surface" aria-hidden="true" />
           <p className="px-2 pb-3 text-sm font-bold">{account.name}</p>
           <button type="button" role="menuitem" onClick={() => choose(onEdit)} className="flex min-h-12 w-full items-center gap-3 rounded-2xl px-3 text-left text-sm font-semibold hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"><Pencil className="size-5" aria-hidden="true" />Edit account</button>
-          <button type="button" role="menuitem" onClick={() => choose(onDelete)} className="flex min-h-12 w-full items-center gap-3 rounded-2xl px-3 text-left text-sm font-semibold text-destructive hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/30"><Trash2 className="size-5" aria-hidden="true" />Delete account</button>
+          {onToggleActive && <button type="button" role="menuitem" onClick={() => choose(onToggleActive)} className="flex min-h-12 w-full items-center rounded-xl px-3 text-left text-sm font-semibold hover:bg-secondary">Mark as {account.isActive === false ? "Active" : "Inactive"}</button>}
+        <button type="button" role="menuitem" onClick={() => choose(onDelete)} className="flex min-h-12 w-full items-center gap-3 rounded-2xl px-3 text-left text-sm font-semibold text-destructive hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/30"><Trash2 className="size-5" aria-hidden="true" />Delete account</button>
         </div>
       </div>, document.body)}
     </>}

@@ -13,7 +13,7 @@ test("protected routes reject an unauthenticated non-demo request",async({page,c
 
 test("invalid callbacks return safely to sign in",async({page})=>{await page.goto("/auth/callback?next=//attacker.example");await expect(page).toHaveURL(/\/login\?error=auth_callback/);await expect(page.getByRole("heading",{name:"Welcome back"})).toBeVisible()});
 
-test("user can add and edit a historical transaction",async({page})=>{await page.goto("/transactions");await page.waitForFunction(() => document.documentElement.dataset.hydrated === "true");await page.locator("main").getByRole("button",{name:"Add transaction"}).click();await page.getByLabel("Amount").fill("425.50");await page.getByLabel("Merchant / description").fill("E2E Cafe");await page.getByLabel("Date").fill("2025-03-14");await page.getByRole("button",{name:"Save transaction"}).click();await page.getByRole("textbox",{name:"Search transactions"}).fill("E2E Cafe");await expect(page.getByText("E2E Cafe",{exact:true})).toBeVisible();await page.getByRole("button",{name:"Edit E2E Cafe"}).click();await page.getByLabel("Merchant / description").fill("E2E Cafe edited");await page.getByRole("button",{name:"Save changes"}).click();await expect(page.getByText("E2E Cafe edited")).toBeVisible()});
+test("user can add and edit a historical transaction",async({page})=>{await page.goto("/transactions");await page.waitForFunction(() => document.documentElement.dataset.hydrated === "true");await page.locator("main").getByRole("button",{name:"Add transaction"}).click();await page.getByLabel("Amount").fill("425.50");await page.getByLabel("Merchant / description").fill("E2E Cafe");await page.getByLabel("Date",{exact:true}).fill("2025-03-14");await page.getByRole("button",{name:"Save transaction"}).click();await page.getByRole("textbox",{name:"Search transactions"}).fill("E2E Cafe");await expect(page.getByText("E2E Cafe",{exact:true})).toBeVisible();await page.getByRole("button",{name:"Open E2E Cafe"}).click();await page.getByLabel("Merchant / description").fill("E2E Cafe edited");await page.getByRole("button",{name:"Save changes"}).click();await expect(page.getByText("E2E Cafe edited")).toBeVisible()});
 
 test("mobile navigation exposes every review-first entry choice",async({page},testInfo)=>{test.skip(testInfo.project.name!=="mobile");await page.goto("/dashboard");await page.waitForFunction(() => document.documentElement.dataset.hydrated === "true");const quickAdd=page.getByRole("button",{name:"Add transaction"});await expect(quickAdd).toBeVisible();await quickAdd.click();const dialog=page.getByRole("dialog");await expect(dialog).toBeVisible();await expect(dialog.getByRole("button",{name:"Manual"})).toBeVisible();await expect(dialog.getByRole("button",{name:"Voice"})).toBeVisible();await expect(dialog.getByRole("link",{name:"Scan receipt"})).toBeVisible();await expect(dialog.getByRole("link",{name:"Import statement"})).toBeVisible()});
 
@@ -118,7 +118,7 @@ test("goal contributions persist in history without creating spending",async({pa
   const goal = page.locator(".card").filter({ hasText: "Emergency fund" }).first();
   await goal.getByRole("button",{name:"Add money"}).click();
   await page.getByLabel("Amount").fill("5000");
-  await page.getByLabel("Date").fill("2026-09-05");
+  await page.getByLabel("Date",{exact:true}).fill("2026-09-05");
   await page.getByLabel("Note (optional)").fill("E2E allocation");
   await page.getByRole("button",{name:"Add contribution"}).click();
   await expect(goal.getByText("E2E allocation",{exact:false})).toBeVisible();

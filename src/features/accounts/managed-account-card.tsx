@@ -11,7 +11,7 @@ import type { Account, AccountDraft } from "@/features/finance/types";
 import { loadedAccountDeleteBlocker } from "./account-deletion";
 
 export function ManagedAccountCard({ account, balance, compact = false, initiallyEditing = false }: { account: Account; balance: bigint; compact?: boolean; initiallyEditing?: boolean }) {
-  const { data, updateAccount, deleteAccount, archiveAccount } = useFinance();
+  const { data, updateAccount, deleteAccount, archiveAccount, setAccountActive } = useFinance();
   const [editing, setEditing] = useState(initiallyEditing);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -56,8 +56,8 @@ export function ManagedAccountCard({ account, balance, compact = false, initiall
   };
 
   return <>
-    <PremiumAccountCard account={account} balance={balance} compact={compact} onEdit={() => setEditing(true)} onDelete={() => setConfirmingDelete(true)} lastPayment={lastPayment ? { date: lastPayment.date, amountMinor: lastPayment.amountMinor } : undefined} />
-    <AccountFormDialog open={editing} onClose={() => setEditing(false)} account={account} accounts={data.accounts} currency={data.profile.currency} onSave={save} />
+    <PremiumAccountCard account={account} balance={balance} compact={compact} onEdit={() => setEditing(true)} onToggleActive={() => { void setAccountActive(account.id, account.isActive === false).then(() => toast.success(account.isActive === false ? "Account marked active" : "Account marked inactive")).catch((error) => toast.error(error.message)); }} onDelete={() => setConfirmingDelete(true)} lastPayment={lastPayment ? { date: lastPayment.date, amountMinor: lastPayment.amountMinor } : undefined} />
+    <AccountFormDialog open={editing} onClose={() => setEditing(false)} account={{ ...account, currentBalanceMinor: balance }} accounts={data.accounts} currency={data.profile.currency} onSave={save} />
     <Modal
       open={confirmingDelete}
       onClose={() => setConfirmingDelete(false)}

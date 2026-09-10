@@ -96,7 +96,9 @@ const moneyInput = (value?: bigint) => value === undefined ? "" : `${value / 100
 
 export function accountToForm(account?: Account): AccountFormValues {
   if (!account) return emptyAccountForm;
-  const value = account.openingBalanceMinor;
+  const value = account.type === "credit_card" || account.type === "loan"
+    ? account.currentBalanceMinor ?? account.openingBalanceMinor
+    : account.openingBalanceMinor;
   const absolute = value < 0n ? -value : value;
   const fraction = String(absolute % 100n).padStart(2, "0");
   return {
@@ -122,12 +124,19 @@ export function accountToForm(account?: Account): AccountFormValues {
 }
 
 export function accountFormToDraft(values: AccountFormValues, currency: string, existing?: Account): AccountDraft {
+  // The editor asks for current outstanding, whereas storage keeps a ledger
+  // opening balance. Preserve the recorded net purchases/payments exactly once.
+  const enteredMinor = parseMoney(values.opening);
+  const usesOutstanding = existing && existing.type === values.type && (values.type === "credit_card" || values.type === "loan");
+  const openingBalanceMinor = usesOutstanding
+    ? enteredMinor - ((existing.currentBalanceMinor ?? existing.openingBalanceMinor) - existing.openingBalanceMinor)
+    : enteredMinor;
   return {
     name: values.name.trim(),
     institution: values.institution.trim(),
     type: values.type,
     currency,
-    openingBalanceMinor: parseMoney(values.opening),
+    openingBalanceMinor,
     color: existing?.color ?? financeColors.accent,
     lastFour: existing?.lastFour,
     includeInNetWorth: existing?.includeInNetWorth ?? true,

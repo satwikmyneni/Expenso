@@ -9,7 +9,7 @@ vi.mock("@/features/finance/use-finance-query", () => ({
   usePeriodReport: () => ({ result: { income: 0n, expenses: 0n, transfers: 0n, categories: [], months: [], days: [], budgets: [], count: 0 } }),
   useTransactions: () => ({ result: { rows: [], total: 0 } }),
 }));
-vi.mock("@/features/dashboard/cashflow-chart", () => ({ BalanceTrendChart: () => <div data-testid="balance-chart" /> }));
+vi.mock("@/features/dashboard/cashflow-chart", () => ({ CashflowChart: () => <div data-testid="balance-chart" /> }));
 vi.mock("@/features/dashboard/spending-ring", () => ({ SpendingRing: () => <div data-testid="spending-ring" /> }));
 vi.mock("@/features/transactions/transaction-row", () => ({ TransactionRow: () => null }));
 vi.mock("@/features/accounts/managed-account-card", () => ({ ManagedAccountCard: () => null }));

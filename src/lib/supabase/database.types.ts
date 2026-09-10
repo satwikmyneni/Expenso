@@ -16,6 +16,7 @@ export type Database = {
     Tables: {
       accounts: {
         Row: {
+          is_active: boolean
           archived_at: string | null
           card_network: string | null
           color: string
@@ -47,6 +48,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          is_active?: boolean
           archived_at?: string | null
           card_network?: string | null
           color?: string
@@ -78,6 +80,7 @@ export type Database = {
           user_id?: string
         }
         Update: {
+          is_active?: boolean
           archived_at?: string | null
           card_network?: string | null
           color?: string
@@ -1298,6 +1301,8 @@ export type Database = {
       }
     }
     Functions: {
+      delete_category_safely: { Args: { target_category_id: string }; Returns: undefined }
+      delete_goal_safely: { Args: { target_goal_id: string }; Returns: undefined }
       search_finance_transactions: { Args: { filters?: Json }; Returns: Json }
       finance_period_report: { Args: { date_from: string; date_to: string; account_filter?: string }; Returns: Json }
       save_budget_details: { Args: { target_id: string | null; details: Json; category_ids: string[] }; Returns: string }

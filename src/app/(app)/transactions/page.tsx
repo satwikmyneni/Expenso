@@ -16,6 +16,7 @@ import { TransactionRow } from "@/features/transactions/transaction-row";
 import { TransactionModal } from "@/features/transactions/transaction-modal";
 import { dateRange, datePresets, transactionSorts, type DatePreset, type TransactionQuery, type TransactionSort } from "@/features/transactions/query";
 import { formatMoney } from "@/features/finance/money";
+import { CashflowChart } from "@/features/dashboard/cashflow-chart";
 import { accountBalance } from "@/features/finance/calculations";
 import { exportTransactionsCsv } from "@/features/exports/csv";
 
@@ -60,18 +61,27 @@ function TransactionsContent() {
     try { await deleteTransaction(id); refresh(); toast.success("Transaction deleted"); }
     catch (error) { toast.error(error instanceof Error ? error.message : "Could not delete transaction"); }
   };
+  const summaryRange = dateRange("this_month");
+  const summary = usePeriodReport(query.dateFrom ?? summaryRange.dateFrom!,query.dateTo ?? summaryRange.dateTo!,query.account);
   const exact = query.id ? result?.rows[0] : undefined;
   return <>
     <PageHeading eyebrow={selectedAccount ? "Account history" : "Money activity"} title={selectedAccount?.name ?? "Transactions"} description={String(result?.total ?? "…")+" matching records · Review every movement."} action={<Button onClick={() => setAddOpen(true)}><Plus className="size-4"/>Add transaction</Button>}/>
     {selectedAccount && <AccountHistorySummary accountId={selectedAccount.id} from={query.dateFrom} to={query.dateTo}/>}
     {result?.cached && <p role="status" className="mb-4 rounded-xl border p-3 text-sm">Offline: showing only your recently cached transactions and pending entries. Connect for complete history, reporting, and export.</p>}
     {query.account && <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-2xl border p-3 text-sm"><span>Showing only <strong>{selectedAccount?.name ?? "selected account"}</strong></span><Button size="sm" variant="ghost" onClick={() => change({account:undefined})}>Clear account</Button></div>}
+    {!selectedAccount && <Card className="mb-4 p-4 [&_.cashflow-chart]:h-[160px] sm:[&_.cashflow-chart]:h-[245px]"><p className="eyebrow">{query.dateFrom || query.dateTo ? "Selected date range" : "This month"} - Income and spending</p><div className="mt-3 flex flex-wrap gap-5 text-sm"><span>Income {formatMoney(summary.result?.income ?? 0n,data.profile.currency)}</span><span>Spending {formatMoney(summary.result?.expenses ?? 0n,data.profile.currency)}</span></div><CashflowChart transactions={[]} currency={data.profile.currency} reportTrend={(summary.result?.days ?? []).map((day)=>({month:format(new Date(day.day+"T12:00:00"),"d MMM"),incomeMinor:day.income,expenseMinor:day.expenses}))}/>{summary.error && <p role="alert">{summary.error}</p>}</Card>}
     <Card>
-      <div className="flex min-w-0 flex-col gap-3 border-b p-4 sm:flex-row sm:flex-wrap sm:items-center">
-        <div className="relative min-w-0 flex-1"><Search className="absolute left-3 top-4 size-4 text-muted"/><Input aria-label="Search transactions" id="global-search" placeholder="Search merchant, reference or notes…" className="pl-10" value={query.search ?? ""} onChange={(event) => change({search:event.target.value})}/></div>
+      <div className="flex min-w-0 flex-wrap items-center gap-3 border-b p-4">
+        <div className="relative w-full min-w-0 sm:w-auto sm:flex-1"><Search className="absolute left-3 top-4 size-4 text-muted"/><Input aria-label="Search transactions" id="global-search" placeholder="Search merchant, reference or notes…" className="pl-10" value={query.search ?? ""} onChange={(event) => change({search:event.target.value})}/></div>
         <Button variant="secondary" onClick={() => setFiltersOpen(!filtersOpen)}><SlidersHorizontal className="size-4"/>Filters</Button>
-        <Select aria-label="Sort transactions" className="sm:w-52" value={query.sort} onChange={(event) => change({sort:event.target.value})}>{transactionSorts.map((sort,index) => <option key={sort} value={sort}>{sortLabels[index]}</option>)}</Select>
-        <Button variant="secondary" disabled={exporting} onClick={() => { setExporting(true); void exportTransactions(query).then((rows) => { exportTransactionsCsv(rows,data.accounts,data.categories); toast.success("CSV export prepared"); }).catch((error) => toast.error(error.message)).finally(() => setExporting(false)); }}><Download className="size-4"/>{exporting ? "Exporting…" : "Export"}</Button>
+        <Select aria-label="Sort transactions" className="w-auto min-w-0 flex-1 sm:w-52 sm:flex-none" value={query.sort} onChange={(event) => change({sort:event.target.value})}>{transactionSorts.map((sort,index) => <option key={sort} value={sort}>{sortLabels[index]}</option>)}</Select>
+        <Button aria-label={exporting ? "Exporting transactions" : "Export transactions"} variant="secondary" disabled={exporting} onClick={() => { setExporting(true); void exportTransactions(query).then((rows) => { exportTransactionsCsv(rows,data.accounts,data.categories); toast.success("CSV export prepared"); }).catch((error) => toast.error(error.message)).finally(() => setExporting(false)); }}><Download className="size-4"/><span className="hidden sm:inline">{exporting ? "Exporting…" : "Export"}</span></Button>
+      </div>
+      <div className="filter-chips flex max-w-full gap-2 overflow-x-auto border-b p-4 [&>select]:w-auto [&>select]:max-w-none [&>select]:shrink-0" aria-label="Quick transaction filters">
+        <Select aria-label="Activity filter" value={query.type ?? ""} onChange={(event)=>change({type:event.target.value})}><option value="">All activity</option>{["expense","income","transfer","refund","adjustment"].map((type)=><option key={type}>{type}</option>)}</Select>
+        <Select aria-label="Quick account filter" value={query.account ?? ""} onChange={(event)=>change({account:event.target.value})}><option value="">All accounts</option>{data.accounts.map((account)=><option key={account.id} value={account.id}>{account.name}</option>)}</Select>
+        <Select aria-label="Quick category filter" value={query.category ?? ""} onChange={(event)=>change({category:event.target.value})}><option value="">All categories</option>{data.categories.filter((category)=>!category.archived).map((category)=><option key={category.id} value={category.id}>{category.name}</option>)}</Select>
+        <Select aria-label="Quick date filter" value={preset} onChange={(event)=>{ const value=event.target.value as DatePreset; change({datePreset:value,...(value==="custom"?{}:dateRange(value))}); if(value==="custom") setFiltersOpen(true); }}>{datePresets.map((value,index)=><option key={value} value={value}>{presetLabels[index]}</option>)}</Select>
       </div>
       {filtersOpen && <div className="grid min-w-0 gap-4 border-b p-4 sm:grid-cols-2 lg:grid-cols-3" aria-label="Transaction filters">
         <Field label="Date"><Select value={preset} onChange={(event) => { const value=event.target.value as DatePreset; const range=value === "custom" ? {} : dateRange(value); change({datePreset:value,dateFrom:range.dateFrom,dateTo:range.dateTo}); }}>{datePresets.map((value,index) => <option key={value} value={value}>{presetLabels[index]}</option>)}</Select></Field>
@@ -88,7 +98,7 @@ function TransactionsContent() {
         {error ? <div role="alert" className="py-10 text-sm">{error}<Button onClick={refresh} variant="secondary" className="mt-3">Retry</Button></div>
           : !result ? <p role="status" className="py-12 text-center">Loading transactions…</p>
           : result.rows.length ? result.rows.map((row,index) => <div key={row.id}>
-            {(query.sort === "newest" || query.sort === "oldest") && row.date !== result.rows[index-1]?.date && <h2 className="eyebrow pt-5 sm:hidden">{format(new Date(row.date+"T12:00:00"),"EEEE, d MMM yyyy")}</h2>}
+            {(query.sort === "newest" || query.sort === "oldest") && row.date !== result.rows[index-1]?.date && <h2 className="flex flex-wrap justify-between gap-2 border-b pb-3 pt-5 text-xs font-semibold"><span>{format(new Date(row.date+"T12:00:00"),"EEEE, d MMM yyyy")}</span><span className="amount" title="Income minus spending for all matching transactions on this date">{formatMoney(result.dailyTotals?.[row.date] ?? 0n,data.profile.currency)}</span></h2>}
             <TransactionRow transaction={row} accounts={data.accounts} categories={data.categories} onEdit={setEditing} onDelete={remove}/>
           </div>) : <div className="py-16 text-center"><Filter className="mx-auto mb-4 size-6"/><h2 className="font-semibold">No matching transactions</h2><p className="mt-2 text-sm text-muted">Try a different period or clear a filter.</p></div>}
       </CardContent>
@@ -102,5 +112,5 @@ function TransactionsContent() {
 function AccountHistorySummary({accountId,from,to}:{accountId:string;from?:string;to?:string}) {
   const {data}=useFinance(); const account=data.accounts.find((row)=>row.id===accountId)!;
   const {result,error}=usePeriodReport(from ?? "0001-01-01",to ?? "9999-12-31",accountId);
-  return <Card className="mb-4 p-4"><p className="text-sm font-semibold">{account.institution} · {account.type.replaceAll("_"," ")} · {account.archived ? "Archived" : "Active"}</p><div className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-4">{[["Current balance",account.archived && !data.demo ? null : accountBalance(account,data.transactions)],["Income",result?.income],["Expenses",result?.expenses],["Transfers",result?.transfers]].map(([label,value])=><div key={String(label)} className="min-w-0"><p className="eyebrow">{label}</p><p className="amount mt-1 break-words font-semibold">{typeof value==="bigint"?formatMoney(value,data.profile.currency):value===null?"Archived":"…"}</p></div>)}</div>{error&&<p role="alert" className="mt-3 text-sm">{error}</p>}</Card>;
+  return <Card className="mb-4 p-4"><p className="text-sm font-semibold">{account.institution} · {account.type.replaceAll("_"," ")} · {account.archived ? "Archived" : account.isActive === false ? "Inactive" : "Active"}</p><div className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-4">{[["Current balance",account.archived && !data.demo ? null : accountBalance(account,data.transactions)],["Income",result?.income],["Expenses",result?.expenses],["Transfers",result?.transfers]].map(([label,value])=><div key={String(label)} className="min-w-0"><p className="eyebrow">{label}</p><p className="amount mt-1 break-words font-semibold">{typeof value==="bigint"?formatMoney(value,data.profile.currency):value===null?"Archived":"…"}</p></div>)}</div>{error&&<p role="alert" className="mt-3 text-sm">{error}</p>}</Card>;
 }

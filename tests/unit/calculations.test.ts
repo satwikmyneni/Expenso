@@ -13,3 +13,15 @@ describe("finance calculations",()=>{
   it("uses the selected budget period",()=>{const budget:Budget={id:"b",name:"Weekly",categoryIds:["food"],limitMinor:1000n,period:"weekly",alertThreshold:80,rollover:false};const current=transaction("now","expense",100n,"bank",{categoryId:"food",date:"2026-09-03"});const prior=transaction("prior","expense",900n,"bank",{categoryId:"food",date:"2026-08-30"});expect(budgetProgress(budget,[current,prior],new Date("2026-09-03T12:00:00")).spentMinor).toBe(100n)});
   it("calculates savings rate from exact totals",()=>expect(savingsRate(10000n,7500n)).toBe(25));
 });
+
+// Available money and liabilities must remain distinct even when an account is inactive.
+describe("financial overview", () => {
+  it("separates available assets, loans, credit cards and net worth", async () => {
+    const { totalBalance, liabilityTotal, netWorth } = await import("@/features/finance/calculations");
+    const accounts = [account("bank","bank",5000000n), {...account("cash","cash",500000n),isActive:false},account("card","credit_card",1000000n),account("loan","loan",10000000n)];
+    expect(totalBalance(accounts,[])).toBe(5500000n);
+    expect(liabilityTotal(accounts,[],"loan")).toBe(10000000n);
+    expect(liabilityTotal(accounts,[],"credit_card")).toBe(1000000n);
+    expect(netWorth(accounts,[])).toBe(-5500000n);
+  });
+});

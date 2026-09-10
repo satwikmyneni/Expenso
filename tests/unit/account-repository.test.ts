@@ -65,3 +65,11 @@ describe("account repository boundaries", () => {
     expect(ownerEq).toHaveBeenCalledWith("user_id", "user-a");
   });
 });
+
+it("persists active status without archiving or rewriting balances",async()=>{
+  const single=vi.fn().mockResolvedValue({data:{id:"account-1",type:"bank",opening_balance:100,archived_at:null,is_active:false},error:null});
+  const select=vi.fn(()=>({single})); const owner=vi.fn(()=>({select})); const id=vi.fn(()=>({eq:owner})); const update=vi.fn(()=>({eq:id}));
+  const repository=new FinanceRepository({from:vi.fn(()=>({update}))} as never);
+  await expect(repository.setAccountActive("user-a","account-1",false)).resolves.toMatchObject({isActive:false,archived:false});
+  expect(update).toHaveBeenCalledWith({is_active:false});expect(owner).toHaveBeenCalledWith("user_id","user-a");
+});

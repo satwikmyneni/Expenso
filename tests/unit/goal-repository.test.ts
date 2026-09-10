@@ -40,3 +40,14 @@ describe("goal contribution repository", () => {
     expect(upsert).toHaveBeenCalledWith([expect.objectContaining({ user_id: "user-a", dedupe_key: "credit_card_due:card:2026-09-08:3" })], { onConflict: "user_id,dedupe_key", ignoreDuplicates: true });
   });
 });
+
+it("deletes goals and categories through atomic ownership-checked RPCs", async () => {
+  const rpc=vi.fn().mockResolvedValue({error:null});
+  const from=vi.fn();
+  const repository=new FinanceRepository({rpc,from} as never);
+  await repository.deleteGoal("user-a","goal-1");
+  await repository.deleteCategory("category-1");
+  expect(rpc).toHaveBeenCalledWith("delete_goal_safely",{target_goal_id:"goal-1"});
+  expect(rpc).toHaveBeenCalledWith("delete_category_safely",{target_category_id:"category-1"});
+  expect(from).not.toHaveBeenCalled();
+});
